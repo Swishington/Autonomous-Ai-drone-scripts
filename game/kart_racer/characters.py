@@ -10,6 +10,11 @@ import random
 
 import pygame
 
+# Names for the two family racers. Change these to your kids' names
+# (only on your own computer if this repository is public).
+SISTER_NAME = "Little Sis"
+BROTHER_NAME = "Big Bro"
+
 CANVAS = 120
 
 
@@ -17,10 +22,13 @@ def _canvas():
     return pygame.Surface((CANVAS, CANVAS), pygame.SRCALPHA)
 
 
-def _eyes(s, cx, cy, gap, r=8, lashes=False, look=(1, 1)):
+def _eyes(s, cx, cy, gap, r=8, lashes=False, look=(1, 1), iris=None):
     for ex in (cx - gap, cx + gap):
         pygame.draw.ellipse(s, (255, 255, 255), (ex - r, cy - r * 1.2, r * 2, r * 2.4))
-        pygame.draw.ellipse(s, (30, 25, 45), (ex - r * 0.65 + look[0], cy - r * 0.8 + look[1], r * 1.3, r * 1.7))
+        if iris is not None:
+            pygame.draw.ellipse(s, iris, (ex - r * 0.8 + look[0], cy - r * 0.95 + look[1], r * 1.6, r * 2.0))
+        pygame.draw.ellipse(s, (30, 25, 45), (ex - r * 0.65 + look[0], cy - r * 0.8 + look[1], r * 1.3, r * 1.7)
+                            if iris is None else (ex - r * 0.4 + look[0], cy - r * 0.5 + look[1], r * 0.8, r * 1.0))
         pygame.draw.circle(s, (255, 255, 255), (ex - r * 0.2 + look[0], cy - r * 0.4 + look[1]), max(2, r // 3))
         if lashes:
             side = -1 if ex < cx else 1
@@ -234,7 +242,78 @@ def draw_hot_rod():
     return s
 
 
+# --- Family racers (drawn from a photo: no image is stored) -------------------------
+HAIR = (55, 35, 25)
+HAIR_LIGHT = (90, 60, 40)
+SKIN = (232, 190, 155)
+SKIN_SHADE = (215, 165, 130)
+BROWN_EYES = (110, 70, 40)
+
+
+def draw_sister():
+    """Dark curly pigtail buns, a fringe and a pink dress."""
+    s = _canvas()
+    # Curly ringlets hanging from the pigtails
+    for side in (-1, 1):
+        bx = 60 + side * 34
+        for k in range(4):
+            pygame.draw.circle(s, HAIR, (bx + side * (k % 2) * 4, 34 + k * 11), 7)
+            pygame.draw.circle(s, HAIR_LIGHT, (bx + side * (k % 2) * 4 - 2, 32 + k * 11), 2)
+    pygame.draw.circle(s, HAIR, (60, 58), 38)                   # hair behind the head
+    for side in (-1, 1):                                       # the two buns
+        pygame.draw.circle(s, HAIR, (60 + side * 32, 22), 15)
+        pygame.draw.circle(s, HAIR_LIGHT, (60 + side * 32 - 4, 17), 5)
+        pygame.draw.circle(s, (255, 150, 190), (60 + side * 22, 30), 5)   # pink hair ties
+    # Pink dress at the bottom
+    pygame.draw.ellipse(s, (255, 190, 210), (24, 94, 72, 40))
+    pygame.draw.rect(s, SKIN, (52, 88, 16, 10))                 # neck
+    pygame.draw.circle(s, SKIN, (60, 64), 29)                   # face
+    pygame.draw.circle(s, SKIN, (31, 66), 6)                    # ears
+    pygame.draw.circle(s, SKIN, (89, 66), 6)
+    # Fringe
+    pygame.draw.ellipse(s, HAIR, (30, 32, 60, 26))
+    for x in (38, 48, 58, 68, 78):
+        pygame.draw.polygon(s, HAIR, [(x - 7, 48), (x + 7, 48), (x + 1, 58)])
+    _eyes(s, 60, 66, 12, 7, lashes=True, iris=BROWN_EYES)
+    _cheeks(s, 60, 78, 18)
+    pygame.draw.arc(s, (170, 70, 80), (51, 76, 18, 12), math.pi * 1.1, math.pi * 1.9, 3)
+    _star(s, 100, 100, 8, (255, 160, 200))
+    return s
+
+
+def draw_brother():
+    """Short dark hair, a few freckles and a navy button-up shirt."""
+    s = _canvas()
+    # Navy shirt with a collar and buttons
+    pygame.draw.ellipse(s, (40, 50, 80), (18, 92, 84, 50))
+    pygame.draw.rect(s, SKIN_SHADE, (52, 86, 16, 12))           # neck
+    pygame.draw.polygon(s, (55, 68, 105), [(46, 92), (60, 104), (52, 110), (38, 98)])   # collar
+    pygame.draw.polygon(s, (55, 68, 105), [(74, 92), (60, 104), (68, 110), (82, 98)])
+    for y in (108, 118):
+        pygame.draw.circle(s, (150, 130, 100), (60, y), 2)
+    pygame.draw.circle(s, SKIN, (29, 60), 7)                    # ears
+    pygame.draw.circle(s, SKIN, (91, 60), 7)
+    pygame.draw.ellipse(s, SKIN, (30, 26, 60, 66))              # face
+    # Short hair
+    pygame.draw.ellipse(s, HAIR, (30, 16, 60, 30))
+    pygame.draw.rect(s, HAIR, (30, 30, 6, 10), border_radius=3)
+    pygame.draw.rect(s, HAIR, (84, 30, 6, 10), border_radius=3)
+    for x in (40, 50, 60, 70, 80):                              # short soft fringe
+        pygame.draw.polygon(s, HAIR, [(x - 7, 34), (x + 6, 34), (x - 2, 41)])
+    for x, y in ((42, 22), (56, 19), (70, 21), (50, 27), (64, 26)):
+        pygame.draw.circle(s, HAIR_LIGHT, (x, y), 2)
+    pygame.draw.line(s, HAIR, (40, 49), (52, 48), 3)            # eyebrows
+    pygame.draw.line(s, HAIR, (68, 48), (80, 49), 3)
+    _eyes(s, 60, 58, 12, 7, iris=BROWN_EYES)
+    for x, y in ((44, 70), (48, 73), (41, 74), (76, 70), (72, 73), (79, 74)):   # freckles
+        pygame.draw.circle(s, (190, 135, 100), (x, y), 1)
+    pygame.draw.arc(s, (150, 70, 60), (48, 72, 24, 14), math.pi * 1.1, math.pi * 1.9, 3)
+    return s
+
+
 ROSTER = [
+    (SISTER_NAME, draw_sister,         (255, 170, 205), (255, 255, 255), [(255, 160, 200), (200, 150, 255), (255, 255, 255)], "rider"),
+    (BROTHER_NAME, draw_brother,       (40, 55, 95),    (235, 220, 190), [(120, 160, 255), (255, 255, 255)],             "rider"),
     # name,      avatar fn,           kart body,        accent,           trail colours,                               style
     ("Sparkle",  draw_unicorn,        (255, 150, 200), (255, 255, 255), [(255, 110, 170), (255, 200, 80), (120, 210, 255), (180, 130, 255)], "rider"),
     ("Coral",    draw_mermaid,        (40, 200, 190),  (190, 60, 140),  [(120, 230, 255), (255, 255, 255)],             "rider"),

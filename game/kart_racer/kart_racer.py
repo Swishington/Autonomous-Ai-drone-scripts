@@ -1062,7 +1062,7 @@ class Game:
                 if "confirm" in f.pressed and len(self.players) < MAX_HUMANS:
                     slot = min(set(range(MAX_HUMANS)) - {p.slot for p in self.players})
                     taken = {p.char_index for p in self.players}
-                    default = next(i for i in [0, 5, 2, 7, 1, 6, 3, 8, 4, 9] if i not in taken)
+                    default = next(i for i in [0, 1, 2, 7, 3, 9, 4, 10, 5, 11, 6, 8] if i not in taken)
                     self.players.append(Player(slot, device, default))
                     self.players.sort(key=lambda p: p.slot)
                     self.input.rumble(device, 0.4, 0.4, 150)

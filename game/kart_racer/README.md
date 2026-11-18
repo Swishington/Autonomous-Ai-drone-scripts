@@ -67,11 +67,16 @@ slows you down and trees are solid. The best lap is saved.
 
 | Magical & sweet       | Action                       |
 |-----------------------|------------------------------|
+| Little Sis (family racer) | Big Bro (family racer)   |
 | Sparkle the unicorn   | Blaze, the fire creature     |
 | Coral the mermaid     | Droplet, the water creature  |
 | Sprinkles the donut   | Ember Ninja (brick-built)    |
 | Swirly the lollipop   | Jade Ninja (brick-built)     |
 | Cupcake               | Flame Rod, a die-cast hot rod |
+
+Little Sis and Big Bro are cartoon versions of the family's own kids. They
+are drawn in code, and no photos are stored. To use their real names, change
+`SISTER_NAME` and `BROTHER_NAME` at the top of `characters.py`.
 
 Every racer has a matching kart and boost trail. Sparkle's trail is a
 rainbow.
