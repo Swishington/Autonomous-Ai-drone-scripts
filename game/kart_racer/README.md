@@ -12,10 +12,52 @@ Requires Python 3.8+.
 ```sh
 cd game/kart_racer
 pip install -r requirements.txt
-python kart_racer.py
+python kart_racer.py            # add --fullscreen for fullscreen
 ```
 
 Press **F11** for fullscreen.
+
+## Install on Bazzite and add to Steam
+
+You'll use this once, in **Desktop Mode**. Open **Konsole** and run:
+
+```sh
+git clone --depth 1 -b claude/pc-game-controller-support-qjf2bx \
+    https://github.com/Swishington/Autonomous-Ai-drone-scripts.git ~/kart-rush-src
+~/kart-rush-src/game/kart_racer/bazzite/install.sh --names "Sister" "Brother"
+```
+
+Put your kids' names in the `--names` part. They're saved only on that PC,
+in `~/.config/kart-rush/family.json`.
+
+The script installs everything into your home folder, which works fine on
+Bazzite's read-only system. It doesn't need `sudo`. It:
+- sets up its own Python environment with
+  [pygame-ce](https://pyga.me), which works with Bazzite's Python;
+- makes a fullscreen launcher and a "Kart Rush" app-menu entry;
+- draws Steam artwork into `~/.local/share/kart-rush/steam-art`.
+
+Then add it to Steam:
+1. In Steam, go to **Games → Add a Non-Steam Game to My Library...**.
+2. Tick **Kart Rush** and click **Add Selected Programs**.
+3. Optional: right-click it, then **Manage → Set custom artwork**, and pick
+   `capsule.png` (cover), `hero.png` (banner) and `logo.png` from the
+   `steam-art` folder.
+
+Kart Rush now appears in **Game Mode** alongside your other games. Every
+controller that's connected can join. To quit, press the **Steam button →
+Exit Game**, or pause the game and press **Select/View**.
+
+You don't need a Steamworks developer account for this. A Non-Steam Game
+shortcut gives the same library entry, controller support and artwork
+privately, without the fee or Valve's review.
+
+To update after a new version is pushed:
+`cd ~/kart-rush-src && git pull && ./game/kart_racer/bazzite/install.sh`.
+Your names are kept.
+
+On Windows or another desktop, `pip install pygame-ce` (or `pygame`) and
+`python kart_racer.py` also works.
 
 ## Getting a race going
 
@@ -75,8 +117,10 @@ slows you down and trees are solid. The best lap is saved.
 | Cupcake               | Flame Rod, a die-cast hot rod |
 
 Little Sis and Big Bro are cartoon versions of the family's own kids. They
-are drawn in code, and no photos are stored. To use their real names, change
-`SISTER_NAME` and `BROTHER_NAME` at the top of `characters.py`.
+are drawn in code, and no photos are stored. Their real names come from
+`~/.config/kart-rush/family.json` on the PC the game is installed on (the
+Bazzite installer's `--names` option writes it). That keeps the names out of
+this repository.
 
 Every racer has a matching kart and boost trail. Sparkle's trail is a
 rainbow.
@@ -93,6 +137,7 @@ rainbow.
 | Drift (hold in a turn) | RB / LB / X (R1 / L1 / Square)   | Right Shift       | Left Shift      |
 | Sparkle boost (Little) | Any of A B X Y LB RB             | Enter / R-Shift   | Space / L-Shift |
 | Pause                  | Start / Options                  | Esc               | Esc             |
+| Quit (when paused)     | Select / View / Share            | X                 | X               |
 | Restart (when paused)  | Y / Triangle                     | R                 | R               |
 
 **Drift boost (Big Racer):** hold drift through a corner at speed. When the
@@ -120,4 +165,6 @@ stick counts), `WRONG_WAY_SECONDS`, `WALL_BOUNCE` and `LITTLE_PLAYER_SKILL`
 
 - `kart_racer.py`: the game (track, physics, AI, lobby, settings, split-screen, HUD).
 - `characters.py`: the 10 racers, all drawn in code.
+- `make_art.py`: draws the Steam library artwork and icon.
+- `bazzite/install.sh`: the Bazzite / Linux installer.
 - `input_manager.py`: input from multiple controllers and a split keyboard, with hot-plug and rumble.

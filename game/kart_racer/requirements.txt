@@ -1,1 +1,2 @@
-pygame>=2.1
+# Either works: pygame-ce (recommended, supports newer Python) or pygame
+pygame-ce>=2.5

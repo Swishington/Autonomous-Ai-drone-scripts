@@ -11,6 +11,8 @@ recognise falls back to the raw joystick API with an XInput-style mapping.
 Controllers can be plugged in or removed while the game is running.
 """
 
+import sys
+
 import pygame
 
 try:
@@ -21,10 +23,14 @@ except ImportError:  # very old pygame builds
 STICK_DEADZONE = 0.15
 TRIGGER_DEADZONE = 0.05
 
-# Raw-joystick fallback layout (XInput order as reported by SDL on Windows).
-# Edit these if you use an unusual pad that SDL has no mapping for.
+# Raw-joystick fallback layout, only used for pads SDL has no mapping for.
+# Xbox-style order: Windows (XInput) and Linux (xpad driver) report axes differently.
+# Edit these if you use an unusual pad.
 RAW_BUTTONS = {"a": 0, "b": 1, "x": 2, "y": 3, "lb": 4, "rb": 5, "back": 6, "start": 7}
-RAW_AXES = {"lx": 0, "ly": 1, "lt": 4, "rt": 5}
+if sys.platform.startswith("linux"):
+    RAW_AXES = {"lx": 0, "ly": 1, "lt": 2, "rt": 5}
+else:
+    RAW_AXES = {"lx": 0, "ly": 1, "lt": 4, "rt": 5}
 
 # Two players can share one keyboard.
 KEYBOARD_LAYOUTS = {
@@ -165,7 +171,7 @@ class InputFrame:
         self.brake = brake
         self.drift = drift
         # Actions that went down this frame:
-        # confirm, back, pause, restart, up, down, left, right, boost
+        # confirm, back, pause, restart, quit, up, down, left, right, boost
         self.pressed = set(pressed)
 
 
@@ -241,6 +247,8 @@ class InputManager:
             actions.add("pause")
         if keys[pygame.K_r]:
             actions.add("restart")
+        if keys[pygame.K_x]:
+            actions.add("quit")
         return steer, throttle, brake, drift, actions
 
     @staticmethod
@@ -256,8 +264,10 @@ class InputManager:
         actions = {d for d in ("up", "down", "left", "right") if d in held}
         if "a" in held:
             actions.add("confirm")
-        if "b" in held or "back" in held:
+        if "b" in held:
             actions.add("back")
+        if "back" in held:
+            actions.add("quit")  # Select / View / Share button
         if "start" in held:
             actions.add("pause")
         if "y" in held:

@@ -4,6 +4,7 @@ Run:  python kart_racer.py
 See README.md in this folder for the full control layout.
 """
 
+import argparse
 import json
 import math
 import os
@@ -467,10 +468,11 @@ def view_rects(n):
 
 
 class Game:
-    def __init__(self, headless=False):
+    def __init__(self, headless=False, fullscreen=False):
         pygame.init()
-        flags = 0 if headless else pygame.SCALED | pygame.RESIZABLE
+        flags = 0 if headless else pygame.SCALED | (pygame.FULLSCREEN if fullscreen else pygame.RESIZABLE)
         self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), flags)
+        pygame.mouse.set_visible(headless or not fullscreen)
         pygame.display.set_caption("Kart Rush")
         self.clock = pygame.time.Clock()
         self.font_huge = pygame.font.Font(None, 130)
@@ -1029,6 +1031,7 @@ class Game:
         self.text(S, self.font, "A / Enter  -  keep racing", (cx, cy), anchor="center")
         self.text(S, self.font, "Y / R  -  restart race", (cx, cy + 40), anchor="center")
         self.text(S, self.font, "B / Backspace  -  back to player select", (cx, cy + 80), anchor="center")
+        self.text(S, self.font, "Select / View  or  X  -  quit game", (cx, cy + 120), (255, 180, 180), anchor="center")
 
     def draw_results(self):
         self.overlay(self.screen, 215)
@@ -1161,6 +1164,8 @@ class Game:
                 self.state = "race"
             elif "back" in pressed:
                 self.back_to_lobby()
+            elif "quit" in pressed:
+                self.running = False
         elif self.state == "results":
             self.update_race(dt, frames)  # the computer racers keep crossing the line
             if self.time - self.results_since < 2.0:
@@ -1191,4 +1196,7 @@ class Game:
 
 
 if __name__ == "__main__":
-    Game().run()
+    parser = argparse.ArgumentParser(description="Kart Rush")
+    parser.add_argument("--fullscreen", action="store_true", help="start in fullscreen (used by the Steam launcher)")
+    args = parser.parse_args()
+    Game(fullscreen=args.fullscreen).run()

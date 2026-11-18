@@ -5,15 +5,36 @@ size. Each one has an `avatar` (a big friendly face drawn above the kart and
 shown on the select screen) and kart colours.
 """
 
+import json
 import math
+import os
 import random
 
 import pygame
 
-# Names for the two family racers. Change these to your kids' names
-# (only on your own computer if this repository is public).
-SISTER_NAME = "Little Sis"
-BROTHER_NAME = "Big Bro"
+# Names for the two family racers. The real names live only on the computer the
+# game is installed on, in ~/.config/kart-rush/family.json, e.g.
+#   {"sister": "Sister", "brother": "Brother"}
+# (bazzite/install.sh --names ... writes it), so they never end up in the repository.
+FAMILY_FILE = os.path.join(os.path.expanduser("~"), ".config", "kart-rush", "family.json")
+
+
+def _family_names():
+    names = {"sister": "Little Sis", "brother": "Big Bro"}
+    try:
+        with open(FAMILY_FILE) as f:
+            data = json.load(f)
+        for key in names:
+            if isinstance(data.get(key), str) and data[key].strip():
+                names[key] = data[key].strip()[:14]
+    except (OSError, ValueError, AttributeError):
+        pass
+    return names
+
+
+_NAMES = _family_names()
+SISTER_NAME = _NAMES["sister"]
+BROTHER_NAME = _NAMES["brother"]
 
 CANVAS = 120
 
