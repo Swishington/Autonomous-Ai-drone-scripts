@@ -1,10 +1,12 @@
-"""Unified gamepad + keyboard input for Kart Rush.
+"""Multi-player gamepad + keyboard input for Kart Rush.
+
+Every connected controller is its own input *device*, and so are two halves of
+the keyboard (arrow keys and WASD), so up to 4 people can play at once.
 
 Console-style controllers (Xbox, PlayStation, Switch Pro, 8BitDo, most
 generic USB/Bluetooth pads) are read through SDL's GameController API, which
 gives every supported pad the same Xbox-style layout. A pad SDL doesn't
 recognise falls back to the raw joystick API with an XInput-style mapping.
-The keyboard always works too, and both can be used at once.
 
 Controllers can be plugged in or removed while the game is running.
 """
@@ -23,6 +25,22 @@ TRIGGER_DEADZONE = 0.05
 # Edit these if you use an unusual pad that SDL has no mapping for.
 RAW_BUTTONS = {"a": 0, "b": 1, "x": 2, "y": 3, "lb": 4, "rb": 5, "back": 6, "start": 7}
 RAW_AXES = {"lx": 0, "ly": 1, "lt": 4, "rt": 5}
+
+# Two players can share one keyboard.
+KEYBOARD_LAYOUTS = {
+    "kb_arrows": {
+        "name": "Keyboard (arrows)",
+        "left": [pygame.K_LEFT], "right": [pygame.K_RIGHT], "up": [pygame.K_UP], "down": [pygame.K_DOWN],
+        "drift": [pygame.K_RSHIFT, pygame.K_RCTRL], "confirm": [pygame.K_RETURN, pygame.K_KP_ENTER],
+        "back": [pygame.K_BACKSPACE], "boost": [pygame.K_RSHIFT, pygame.K_RCTRL, pygame.K_RETURN],
+    },
+    "kb_wasd": {
+        "name": "Keyboard (WASD)",
+        "left": [pygame.K_a], "right": [pygame.K_d], "up": [pygame.K_w], "down": [pygame.K_s],
+        "drift": [pygame.K_LSHIFT], "confirm": [pygame.K_SPACE],
+        "back": [pygame.K_q], "boost": [pygame.K_LSHIFT, pygame.K_SPACE],
+    },
+}
 
 
 def apply_deadzone(value, deadzone=STICK_DEADZONE):
@@ -139,7 +157,7 @@ class Gamepad:
 
 
 class InputFrame:
-    """Everything the game needs to know about input for one frame."""
+    """Everything the game needs to know about one device for one frame."""
 
     def __init__(self, steer=0.0, throttle=0.0, brake=0.0, drift=False, pressed=()):
         self.steer = steer
@@ -151,96 +169,113 @@ class InputFrame:
         self.pressed = set(pressed)
 
 
+EMPTY_FRAME = InputFrame()
+
+
 class InputManager:
     def __init__(self):
         pygame.joystick.init()
         if sdl_controller is not None:
             sdl_controller.init()
-        self.pad = None
-        self._prev_actions = set()
+        self.pads = {}            # device id ("pad<instance id>") -> Gamepad
+        self._prev_actions = {}   # device id -> set of held actions last frame
         self.rescan()
 
+    # --- devices ------------------------------------------------------------
     @property
-    def device_name(self):
-        return self.pad.name if self.pad else "Keyboard (plug in a controller any time)"
+    def device_ids(self):
+        return list(KEYBOARD_LAYOUTS) + list(self.pads)
+
+    @property
+    def pad_ids(self):
+        return list(self.pads)
+
+    def device_name(self, device):
+        if device in KEYBOARD_LAYOUTS:
+            return KEYBOARD_LAYOUTS[device]["name"]
+        pad = self.pads.get(device)
+        return pad.name if pad else "Disconnected"
+
+    def is_connected(self, device):
+        return device in KEYBOARD_LAYOUTS or device in self.pads
 
     def rescan(self):
-        """Grab the first connected pad, if we don't already have one."""
-        if self.pad is not None:
-            return
+        """Open every connected pad we don't already have."""
+        open_ids = {p.instance_id for p in self.pads.values()}
         for i in range(pygame.joystick.get_count()):
             try:
-                self.pad = Gamepad(i)
-                return
+                if pygame.joystick.Joystick(i).get_instance_id() in open_ids:
+                    continue
+                pad = Gamepad(i)
             except pygame.error:
                 continue
+            self.pads[f"pad{pad.instance_id}"] = pad
+            open_ids.add(pad.instance_id)
 
     def handle_event(self, event):
         """Call for every pygame event so hot-plugging works."""
         if event.type in (pygame.JOYDEVICEADDED, getattr(pygame, "CONTROLLERDEVICEADDED", -1)):
             self.rescan()
         elif event.type in (pygame.JOYDEVICEREMOVED, getattr(pygame, "CONTROLLERDEVICEREMOVED", -1)):
-            if self.pad is not None and getattr(event, "instance_id", None) == self.pad.instance_id:
-                self.pad.close()
-                self.pad = None
-                self.rescan()
+            device = f"pad{getattr(event, 'instance_id', -1)}"
+            pad = self.pads.pop(device, None)
+            if pad is not None:
+                pad.close()
+                self._prev_actions.pop(device, None)
 
-    def rumble(self, low, high, duration_ms):
-        if self.pad is not None:
-            self.pad.rumble(low, high, duration_ms)
+    def rumble(self, device, low, high, duration_ms):
+        pad = self.pads.get(device)
+        if pad is not None:
+            pad.rumble(low, high, duration_ms)
 
-    def poll(self):
-        keys = pygame.key.get_pressed()
-        steer = float(keys[pygame.K_RIGHT] or keys[pygame.K_d]) - float(keys[pygame.K_LEFT] or keys[pygame.K_a])
-        throttle = 1.0 if (keys[pygame.K_UP] or keys[pygame.K_w]) else 0.0
-        brake = 1.0 if (keys[pygame.K_DOWN] or keys[pygame.K_s]) else 0.0
-        drift = bool(keys[pygame.K_SPACE] or keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
-
-        actions = set()
-        if keys[pygame.K_RETURN] or keys[pygame.K_KP_ENTER]:
-            actions.add("confirm")
+    # --- polling ------------------------------------------------------------
+    def _keyboard(self, device, keys):
+        layout = KEYBOARD_LAYOUTS[device]
+        down = lambda name: any(keys[k] for k in layout[name])
+        steer = float(down("right")) - float(down("left"))
+        throttle = 1.0 if down("up") else 0.0
+        brake = 1.0 if down("down") else 0.0
+        drift = down("drift")
+        actions = {name for name in ("left", "right", "up", "down", "confirm", "back", "boost") if down(name)}
         if keys[pygame.K_ESCAPE]:
             actions.add("pause")
-        if keys[pygame.K_BACKSPACE]:
-            actions.add("back")
         if keys[pygame.K_r]:
             actions.add("restart")
-        if keys[pygame.K_UP] or keys[pygame.K_w]:
-            actions.add("up")
-        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            actions.add("down")
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            actions.add("left")
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            actions.add("right")
-        if drift or keys[pygame.K_RETURN]:
-            actions.add("boost")
+        return steer, throttle, brake, drift, actions
 
-        if self.pad is not None:
-            try:
-                p_steer, p_throttle, p_brake, held = self.pad.read()
-            except pygame.error:
-                p_steer, p_throttle, p_brake, held = 0.0, 0.0, 0.0, set()
-            if abs(p_steer) > abs(steer):
-                steer = p_steer
-            # A / B work as gas / brake for pads with digital (or no) triggers.
-            throttle = max(throttle, p_throttle, 1.0 if "a" in held else 0.0)
-            brake = max(brake, p_brake, 1.0 if "b" in held else 0.0)
-            drift = drift or bool(held & {"rb", "lb", "x"})
-            if "a" in held:
-                actions.add("confirm")
-            if "b" in held or "back" in held:
-                actions.add("back")
-            if "start" in held:
-                actions.add("pause")
-            if "y" in held:
-                actions.add("restart")
-            for direction in ("up", "down", "left", "right"):
-                if direction in held:
-                    actions.add(direction)
-            if held & {"a", "b", "x", "y", "lb", "rb"}:
-                actions.add("boost")  # any face/shoulder button: used for Little Racer's sparkle boost
+    @staticmethod
+    def _pad(pad):
+        try:
+            steer, throttle, brake, held = pad.read()
+        except pygame.error:
+            return 0.0, 0.0, 0.0, False, set()
+        # A / B work as gas / brake for pads with digital (or no) triggers.
+        throttle = max(throttle, 1.0 if "a" in held else 0.0)
+        brake = max(brake, 1.0 if "b" in held else 0.0)
+        drift = bool(held & {"rb", "lb", "x"})
+        actions = {d for d in ("up", "down", "left", "right") if d in held}
+        if "a" in held:
+            actions.add("confirm")
+        if "b" in held or "back" in held:
+            actions.add("back")
+        if "start" in held:
+            actions.add("pause")
+        if "y" in held:
+            actions.add("restart")
+        if held & {"a", "b", "x", "y", "lb", "rb"}:
+            actions.add("boost")  # any face/shoulder button: Little Racer's sparkle boost
+        return steer, throttle, brake, drift, actions
 
-        pressed = actions - self._prev_actions
-        self._prev_actions = actions
-        return InputFrame(max(-1.0, min(1.0, steer)), throttle, brake, drift, pressed)
+    def poll(self):
+        """Return {device id: InputFrame} for every connected device."""
+        keys = pygame.key.get_pressed()
+        frames = {}
+        for device in self.device_ids:
+            if device in KEYBOARD_LAYOUTS:
+                steer, throttle, brake, drift, actions = self._keyboard(device, keys)
+            else:
+                steer, throttle, brake, drift, actions = self._pad(self.pads[device])
+            pressed = actions - self._prev_actions.get(device, set())
+            self._prev_actions[device] = actions
+            frames[device] = InputFrame(max(-1.0, min(1.0, steer)), throttle, brake, drift, pressed)
+        return frames

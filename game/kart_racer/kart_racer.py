@@ -12,12 +12,16 @@ import random
 import pygame
 
 from characters import load_roster
-from input_manager import InputManager
+from input_manager import EMPTY_FRAME, InputManager
 
 SCREEN_W, SCREEN_H = 1280, 720
 FPS = 60
-BIG_LAPS = 3
-LITTLE_LAPS = 2
+MAX_HUMANS = 4
+MAX_RACERS = 8
+DIFFICULTIES = ["Easy", "Medium", "Hard"]
+AI_SKILL = [0.70, 0.88, 1.00]       # rival top speed for each difficulty
+AI_CATCH_UP = [0.03, 0.05, 0.08]    # how much rivals speed up when behind
+PLAYER_COLORS = [(255, 80, 80), (70, 150, 255), (80, 210, 90), (255, 200, 40)]
 TRACK_WIDTH = 180
 CURB_WIDTH = 12
 WORLD_W, WORLD_H = 3200, 2300
@@ -53,6 +57,7 @@ WALL_BOUNCE = 0.7               # how bouncy the walls are
 WRONG_WAY_SECONDS = 2.0         # going the wrong way this long -> kart turns itself around
 AUTO_TURN_RATE = 3.0            # rad/s while turning around
 SPARKLE_COOLDOWN = 1.2
+FINISH_GRACE_SECONDS = 45     # race ends this long after the first human finishes
 
 
 def catmull_rom_loop(points, samples_per_segment=24):
@@ -124,7 +129,8 @@ class Track:
             if self.distance_to_center(x, y)[0] > TRACK_WIDTH / 2 + 75:
                 self.obstacles.append((x, y, rng.randint(22, 38), rng.choice(kinds)))
         self.surface = self._render(rng)
-        self.minimap = self._render_minimap()
+        self.minimap, self.minimap_scale = self._render_minimap(220)
+        self.minimap_big, self.minimap_big_scale = self._render_minimap(560)
 
     def point(self, i):
         return self.center[i % self.n]
@@ -229,26 +235,46 @@ class Track:
             pygame.draw.polygon(surf, (255, 210, 0), [left, tip, right])
             pygame.draw.polygon(surf, (255, 140, 0), [left, tip, right], 3)
 
-    def _render_minimap(self):
-        scale = 220 / WORLD_W
-        self.minimap_scale = scale
+    def _render_minimap(self, width):
+        scale = width / WORLD_W
         mm = pygame.Surface((int(WORLD_W * scale), int(WORLD_H * scale)), pygame.SRCALPHA)
         mm.fill((0, 0, 0, 120))
         pts = [(x * scale, y * scale) for x, y in self.center]
-        pygame.draw.lines(mm, (230, 230, 230), True, pts, 5)
-        return mm
+        pygame.draw.lines(mm, (230, 230, 230), True, pts, max(4, int(width / 45)))
+        return mm, scale
+
+
+class Player:
+    """A human in the lobby: which device they use, who they picked, which mode."""
+
+    def __init__(self, slot, device, char_index):
+        self.slot = slot
+        self.device = device
+        self.char_index = char_index
+        self.little = False
+        self.ready = False
+
+    @property
+    def color(self):
+        return PLAYER_COLORS[self.slot]
+
+    @property
+    def label(self):
+        return f"P{self.slot + 1}"
 
 
 class Kart:
-    def __init__(self, character, x, y, heading, is_player=False, skill=1.0, lane=0.0):
+    def __init__(self, character, x, y, heading, player=None, skill=1.0, lane=0.0):
         self.character = character
         self.name = character.name
         self.color = character.body
+        self.player = player
+        self.little = bool(player and player.little)
         self.x, self.y = x, y
         self.heading = heading
         self.vx = self.vy = 0.0
-        self.is_player = is_player
         self.skill = skill
+        self.base_skill = skill
         self.lane = lane
         self.idx = 0
         self.laps = -1          # crossing the start line the first time starts lap 1
@@ -261,10 +287,26 @@ class Kart:
         self.last_pad = None
         self.lap_start = 0.0
         self.lap_times = []
+        self.message = ""
+        self.message_timer = 0.0
         # Little Racer helpers
         self.wrong_way_timer = 0.0
         self.auto_turning = False
         self.sparkle_cooldown = 0.0
+        self.last_rumble = -1.0
+        self.img = character.kart
+        self.tag = None
+        if player is not None:
+            font = pygame.font.Font(None, 24)
+            text = font.render(player.label, True, (255, 255, 255))
+            self.tag = pygame.Surface((text.get_width() + 10, text.get_height() + 4), pygame.SRCALPHA)
+            pygame.draw.rect(self.tag, player.color, self.tag.get_rect(), border_radius=6)
+            pygame.draw.rect(self.tag, (0, 0, 0), self.tag.get_rect(), 2, border_radius=6)
+            self.tag.blit(text, (5, 3))
+
+    @property
+    def is_human(self):
+        return self.player is not None
 
     @property
     def forward_speed(self):
@@ -273,8 +315,12 @@ class Kart:
     def progress(self, n):
         return self.laps * n + self.idx
 
-    def update(self, dt, steer, throttle, brake, drift, track, walls=False):
+    def say(self, text, seconds=1.5):
+        self.message, self.message_timer = text, seconds
+
+    def update(self, dt, steer, throttle, brake, drift, track):
         """Advance physics. Returns True if the kart bounced off a wall."""
+        walls = self.little
         fx, fy = math.cos(self.heading), math.sin(self.heading)
         rx, ry = -fy, fx
         fwd = self.vx * fx + self.vy * fy
@@ -345,6 +391,7 @@ class Kart:
         if pad_hit is not None and pad_hit != self.last_pad:
             self.boost_timer = max(self.boost_timer, 1.1)
         self.last_pad = pad_hit
+        self.message_timer -= dt
         return bounced
 
     def update_lap(self, prev_idx, n, race_time):
@@ -360,21 +407,30 @@ class Kart:
             return True
         return False
 
-    def draw(self, screen, cam_x, cam_y, t):
+    def prepare_sprite(self):
+        """Rotate once per frame; every split-screen view reuses the result."""
+        self.img = pygame.transform.rotate(self.character.kart, -math.degrees(self.heading))
+
+    def draw(self, surf, cam_x, cam_y, t, show_tag):
         ch = self.character
         cx, cy = self.x - cam_x, self.y - cam_y
+        if not (-80 < cx < surf.get_width() + 80 and -80 < cy < surf.get_height() + 80):
+            return
         shadow = pygame.Surface((52, 52), pygame.SRCALPHA)
         pygame.draw.circle(shadow, (0, 0, 0, 70), (26, 26), 25)
-        screen.blit(shadow, (cx - 22, cy - 20))
+        surf.blit(shadow, (cx - 22, cy - 20))
         if self.boost_timer > 0:
             bx, by = cx - math.cos(self.heading) * 32, cy - math.sin(self.heading) * 32
-            pygame.draw.circle(screen, ch.trail[0], (bx, by), random.randint(7, 11))
-            pygame.draw.circle(screen, (255, 255, 230), (bx, by), 4)
-        img = pygame.transform.rotate(ch.kart, -math.degrees(self.heading))
-        screen.blit(img, img.get_rect(center=(cx, cy)))
+            pygame.draw.circle(surf, ch.trail[0], (bx, by), random.randint(7, 11))
+            pygame.draw.circle(surf, (255, 255, 230), (bx, by), 4)
+        surf.blit(self.img, self.img.get_rect(center=(cx, cy)))
+        top = cy - 18
         if ch.style == "rider":
             bob = math.sin(t * 9 + self.x * 0.01) * 2 * min(1.0, abs(self.forward_speed) / 200)
-            screen.blit(ch.avatar_race, ch.avatar_race.get_rect(center=(cx, cy - 16 + bob)))
+            surf.blit(ch.avatar_race, ch.avatar_race.get_rect(center=(cx, cy - 16 + bob)))
+            top = cy - 44
+        if show_tag and self.tag is not None:
+            surf.blit(self.tag, self.tag.get_rect(midbottom=(cx, top)))
 
 
 class Particle:
@@ -396,6 +452,20 @@ def fmt_time(t):
     return f"{int(t // 60):02d}:{t % 60:05.2f}"
 
 
+def view_rects(n):
+    """Split-screen layout: 1 = full screen, 2 = side by side, 3-4 = quarters."""
+    w, h, g = SCREEN_W, SCREEN_H, 4
+    if n <= 1:
+        return [pygame.Rect(0, 0, w, h)]
+    if n == 2:
+        hw = w // 2 - g // 2
+        return [pygame.Rect(0, 0, hw, h), pygame.Rect(w - hw, 0, hw, h)]
+    hw, hh = w // 2 - g // 2, h // 2 - g // 2
+    quads = [pygame.Rect(0, 0, hw, hh), pygame.Rect(w - hw, 0, hw, hh),
+             pygame.Rect(0, h - hh, hw, hh), pygame.Rect(w - hw, h - hh, hw, hh)]
+    return quads[:n]
+
+
 class Game:
     def __init__(self, headless=False):
         pygame.init()
@@ -412,18 +482,20 @@ class Game:
         self.track = Track()
         self.roster = load_roster()
         self.best_lap = self._load_best()
-        self.little = True          # Little Racer (toddler) mode
-        self.mode_index = 0         # title menu selection
-        self.char_index = 0         # character select selection
-        self.state = "title"
+        self.players = []
+        self.ai_count = 3
+        self.ai_difficulty = 1
+        self.laps = 3
+        self.settings_row = 0
+        self.settings_touched = False
+        self.state = "lobby"
         self.running = True
         self.time = 0.0
         self.particles = []
-        self.new_race()
-
-    @property
-    def laps(self):
-        return LITTLE_LAPS if self.little else BIG_LAPS
+        self.banner = ""
+        self.banner_timer = 0.0
+        self.results_since = 0.0
+        self.new_race(preview=True)
 
     def _load_best(self):
         try:
@@ -439,34 +511,45 @@ class Game:
         except OSError:
             pass
 
-    def new_race(self):
+    # --- race setup -----------------------------------------------------------
+    def new_race(self, preview=False):
+        """Build the grid: humans at the front, then AI racers using unpicked characters."""
         t = self.track
-        player_char = self.roster[self.char_index]
-        rivals = random.sample([c for c in self.roster if c is not player_char], 3)
-        if self.little:
-            skills = [0.72, 0.68, 0.64]
-        else:
-            skills = [0.97, 0.93, 0.89]
+        humans = [] if preview else list(self.players)
+        ai_count = 3 if preview else self.ai_count
+        taken = {p.char_index for p in humans}
+        free = [c for i, c in enumerate(self.roster) if i not in taken]
+        ai_chars = random.sample(free, min(ai_count, len(free)))
+        entries = [(self.roster[p.char_index], p) for p in humans] + [(c, None) for c in ai_chars]
+
         self.karts = []
-        # 2x2 starting grid just behind the start line; player starts at the back.
-        grid = [(-16, 48), (-16, -48), (-8, 48), (-8, -48)]
-        entries = [(rivals[0], skills[0], False), (rivals[1], skills[1], False),
-                   (rivals[2], skills[2], False), (player_char, LITTLE_PLAYER_SKILL if self.little else 1.0, True)]
-        for (idx, off), (ch, skill, is_player) in zip(grid, entries):
+        for i, (ch, player) in enumerate(entries):
+            idx = -8 - 8 * (i // 2)
+            off = 48 if i % 2 == 0 else -48
             px, py = t.point(idx)
             nx, ny = t.normal(idx)
+            if player is not None:
+                skill = LITTLE_PLAYER_SKILL if player.little else 1.0
+            else:
+                ai_i = i - len(humans)
+                skill = AI_SKILL[self.ai_difficulty] - 0.025 * (ai_i % 4) + random.uniform(-0.01, 0.01)
             kart = Kart(ch, px + nx * off, py + ny * off, t.tangents[idx % t.n],
-                        is_player=is_player, skill=skill, lane=random.uniform(-40, 40))
+                        player=player, skill=skill, lane=random.uniform(-40, 40))
             kart.idx = idx % t.n
             self.karts.append(kart)
-        self.player = next(k for k in self.karts if k.is_player)
-        self.base_skills = {k: k.skill for k in self.karts}
+        self.humans = [k for k in self.karts if k.is_human]
         self.race_time = 0.0
         self.countdown = 3.5
         self.finish_order = []
-        self.message = ""
-        self.message_timer = 0.0
+        self.banner_timer = 0.0
         self.particles = []
+        self.standings_cache = list(self.karts)
+
+    def rumble(self, kart, low, high, ms):
+        # At most one rumble per player every quarter second, so bumping along a wall isn't a constant buzz.
+        if kart.is_human and self.time - kart.last_rumble > 0.25:
+            kart.last_rumble = self.time
+            self.input.rumble(kart.player.device, low, high, ms)
 
     # --- AI -----------------------------------------------------------------
     def ai_drive(self, kart, lane=None):
@@ -490,13 +573,14 @@ class Game:
         return steer, throttle, brake
 
     def rubber_band(self, kart):
-        """Rivals speed up a little when behind the player and ease off when ahead."""
+        """Rivals speed up a little when behind the humans and ease off when ahead."""
+        if not self.humans:
+            return
         n = self.track.n
-        gap = self.player.progress(n) - kart.progress(n)
-        base = self.base_skills[kart]
-        # Little Racer rivals barely speed up, so she gets to win often.
-        catch_up = 0.03 if self.little else 0.08
-        kart.skill = clamp(base + 0.0003 * clamp(gap, -300, 300), base - 0.1, base + catch_up)
+        target = sum(h.progress(n) for h in self.humans) / len(self.humans)
+        gap = target - kart.progress(n)
+        base = kart.base_skill
+        kart.skill = clamp(base + 0.0003 * clamp(gap, -300, 300), base - 0.1, base + AI_CATCH_UP[self.ai_difficulty])
 
     # --- Little Racer helpers ---------------------------------------------------------
     def little_controls(self, kart, inp, dt):
@@ -510,8 +594,8 @@ class Game:
             kart.wrong_way_timer = max(0.0, kart.wrong_way_timer - dt * 2)
         if kart.wrong_way_timer > WRONG_WAY_SECONDS and not kart.auto_turning:
             kart.auto_turning = True
-            self.flash("Turning around!", 1.5)
-            self.input.rumble(0.2, 0.4, 150)
+            kart.say("Turning around!", 1.5)
+            self.rumble(kart, 0.2, 0.4, 150)
 
         if kart.auto_turning:
             kart.heading += clamp(off, -AUTO_TURN_RATE * dt, AUTO_TURN_RATE * dt)
@@ -528,7 +612,7 @@ class Game:
             kart.sparkle_cooldown = SPARKLE_COOLDOWN
             kart.boost_timer = max(kart.boost_timer, 0.9)
             self.burst(kart.x, kart.y, kart.character.trail, 26, star=True)
-            self.input.rumble(0.4, 0.8, 180)
+            self.rumble(kart, 0.4, 0.8, 180)
         # The kart always keeps moving; the gas just makes it a bit faster. No brakes.
         throttle = max(0.75, inp.throttle)
         return steer, throttle, 0.0, False
@@ -560,14 +644,17 @@ class Game:
             p.life -= dt
         self.particles = [p for p in self.particles if p.life > 0]
 
-    def draw_particles(self, cam_x, cam_y, screen_space=False):
+    def draw_particles(self, surf, cam_x, cam_y):
+        w, h = surf.get_size()
         for p in self.particles:
-            x, y = (p.x, p.y) if screen_space else (p.x - cam_x, p.y - cam_y)
+            x, y = p.x - cam_x, p.y - cam_y
+            if not (-20 < x < w + 20 and -20 < y < h + 20):
+                continue
             size = p.size * (0.4 + 0.6 * p.life / p.max_life)
             if p.star:
-                draw_star(self.screen, p.color, x, y, size * 1.4)
+                draw_star(surf, p.color, x, y, size * 1.4)
             else:
-                pygame.draw.circle(self.screen, p.color, (x, y), size)
+                pygame.draw.circle(surf, p.color, (x, y), size)
 
     # --- simulation -----------------------------------------------------------
     def collide_karts(self):
@@ -584,8 +671,8 @@ class Game:
                     if rel < 0:
                         a.vx += ux * rel * 0.8; a.vy += uy * rel * 0.8
                         b.vx -= ux * rel * 0.8; b.vy -= uy * rel * 0.8
-                        if a.is_player or b.is_player:
-                            self.input.rumble(0.6, 0.3, 120)
+                        self.rumble(a, 0.6, 0.3, 120)
+                        self.rumble(b, 0.6, 0.3, 120)
 
     def collide_obstacles(self, kart):
         for tx, ty, r, _ in self.track.obstacles:
@@ -598,73 +685,76 @@ class Game:
                 if vn < 0:
                     kart.vx -= 1.5 * vn * ux; kart.vy -= 1.5 * vn * uy
                     kart.vx *= 0.5; kart.vy *= 0.5
-                    if kart.is_player:
-                        self.input.rumble(1.0, 0.8, 250)
+                    self.rumble(kart, 1.0, 0.8, 250)
 
-    def flash(self, text, seconds=1.5):
-        self.message, self.message_timer = text, seconds
-
-    def update_race(self, dt, inp):
+    def update_race(self, dt, frames):
         self.emit_trails(dt)
+        self.banner_timer -= dt
         if self.countdown > 0:
             prev = self.countdown
             self.countdown -= dt
-            if math.ceil(prev) != math.ceil(self.countdown) and self.countdown > 0:
-                self.input.rumble(0.2, 0.2, 80)
+            for h in self.humans:
+                if math.ceil(prev) != math.ceil(self.countdown) and self.countdown > 0:
+                    self.rumble(h, 0.2, 0.2, 80)
+                if self.countdown <= 0:
+                    self.rumble(h, 0.5, 0.5, 200)
             if self.countdown <= 0:
-                self.input.rumble(0.5, 0.5, 200)
-                self.flash("GO!", 1.0)
+                self.banner, self.banner_timer = "GO!", 1.0
             return
         self.race_time += dt
         for kart in self.karts:
             prev_idx = kart.idx
+            inp = frames.get(kart.player.device, EMPTY_FRAME) if kart.is_human else EMPTY_FRAME
             if kart.finished_time is not None:  # cruise after the finish line
                 steer, throttle, brake = self.ai_drive(kart)
                 throttle, drift = throttle * 0.5, False
-            elif kart.is_player and self.little:
+            elif kart.is_human and kart.little:
                 steer, throttle, brake, drift = self.little_controls(kart, inp, dt)
-            elif kart.is_player:
+            elif kart.is_human:
                 steer, throttle, brake, drift = inp.steer, inp.throttle, inp.brake, inp.drift
             else:
                 self.rubber_band(kart)
                 steer, throttle, brake = self.ai_drive(kart)
                 drift = False
             boost_before = kart.boost_timer
-            bounced = kart.update(dt, steer, throttle, brake, drift, self.track, walls=self.little)
-            if kart.is_player:
+            bounced = kart.update(dt, steer, throttle, brake, drift, self.track)
+            if kart.is_human:
                 if kart.boost_timer > boost_before + 0.2:
-                    self.input.rumble(0.3, 0.9, 200)
+                    self.rumble(kart, 0.3, 0.9, 200)
                 if bounced:
-                    self.input.rumble(0.5, 0.2, 120)
+                    self.rumble(kart, 0.5, 0.2, 120)
                     self.burst(kart.x, kart.y, [(255, 255, 255), (255, 230, 120)], 8, star=True, speed=120)
             self.collide_obstacles(kart)
             if kart.update_lap(prev_idx, self.track.n, self.race_time) and kart.finished_time is None:
                 self.on_lap(kart)
         self.collide_karts()
-        self.message_timer -= dt
+        self.standings_cache = self.standings()
+        done = [h.finished_time for h in self.humans if h.finished_time is not None]
+        all_done = len(done) == len(self.humans)
+        if self.state == "race" and self.humans and (all_done or (done and self.race_time - min(done) > FINISH_GRACE_SECONDS)):
+            self.state = "results"
+            self.results_since = self.time
 
     def on_lap(self, kart):
-        if kart.is_player and kart.lap_times:
+        if kart.is_human and kart.lap_times:
             lap = kart.lap_times[-1]
-            if not self.little and (self.best_lap is None or lap < self.best_lap):
+            if not kart.little and (self.best_lap is None or lap < self.best_lap):
                 self.best_lap = lap
                 self._save_best()
-                self.flash(f"NEW BEST LAP  {fmt_time(lap)}", 2.0)
+                kart.say(f"NEW BEST LAP  {fmt_time(lap)}", 2.0)
             elif kart.laps < self.laps:
-                self.flash("Yay! One more lap!" if self.little else f"Lap {kart.laps}  {fmt_time(lap)}", 1.8)
-            if not self.little and kart.laps == self.laps - 1:
-                self.flash("FINAL LAP!", 1.8)
+                kart.say("Yay! Keep going!" if kart.little else f"Lap {kart.laps}  {fmt_time(lap)}", 1.8)
+            if not kart.little and kart.laps == self.laps - 1:
+                kart.say("FINAL LAP!", 1.8)
         if kart.laps >= self.laps:
             kart.finished_time = self.race_time
             self.finish_order.append(kart)
-            if kart.is_player:
-                self.state = "finished"
-                self.input.rumble(0.7, 0.7, 500)
-                if self.little:
-                    confetti = [(255, 110, 170), (255, 200, 80), (120, 210, 255), (180, 130, 255), (140, 230, 120)]
-                    for _ in range(4):
-                        self.burst(kart.x + random.uniform(-200, 200), kart.y + random.uniform(-150, 150),
-                                   confetti, 30, star=True, speed=300)
+            if kart.is_human:
+                self.rumble(kart, 0.7, 0.7, 500)
+                confetti = [(255, 110, 170), (255, 200, 80), (120, 210, 255), (180, 130, 255), (140, 230, 120)]
+                for _ in range(3):
+                    self.burst(kart.x + random.uniform(-150, 150), kart.y + random.uniform(-100, 100),
+                               confetti, 25, star=True, speed=300)
 
     def standings(self):
         n = self.track.n
@@ -672,186 +762,372 @@ class Game:
         rest = sorted((k for k in self.karts if k not in finished), key=lambda k: k.progress(n), reverse=True)
         return finished + rest
 
-    # --- drawing ----------------------------------------------------------------
-    def camera(self):
-        p = self.player
-        lead = 0.25
-        cx = p.x + p.vx * lead - SCREEN_W / 2
-        cy = p.y + p.vy * lead - SCREEN_H / 2
-        return max(0, min(WORLD_W - SCREEN_W, cx)), max(0, min(WORLD_H - SCREEN_H, cy))
-
-    def text(self, font, s, pos, color=(255, 255, 255), anchor="topleft", shadow=True):
+    # --- drawing helpers --------------------------------------------------------------
+    @staticmethod
+    def text(surf, font, s, pos, color=(255, 255, 255), anchor="topleft", shadow=True):
         if shadow:
             img = font.render(s, True, (0, 0, 0))
-            self.screen.blit(img, img.get_rect(**{anchor: (pos[0] + 2, pos[1] + 2)}))
+            surf.blit(img, img.get_rect(**{anchor: (pos[0] + 2, pos[1] + 2)}))
         img = font.render(s, True, color)
         r = img.get_rect(**{anchor: pos})
-        self.screen.blit(img, r)
+        surf.blit(img, r)
         return r
 
-    def draw_world(self):
-        cam_x, cam_y = self.camera()
-        self.screen.blit(self.track.surface, (0, 0), pygame.Rect(cam_x, cam_y, SCREEN_W, SCREEN_H))
-        self.draw_particles(cam_x, cam_y)
-        for k in sorted(self.karts, key=lambda k: (k.is_player, k.y)):
-            k.draw(self.screen, cam_x, cam_y, self.time)
-
-    def draw_hud(self):
-        p = self.player
-        place = self.standings().index(p) + 1
-        lap = min(self.laps, max(1, p.laps + 1))
-        if self.little:
-            panel = pygame.Surface((330, 120), pygame.SRCALPHA)
-            panel.fill((0, 0, 0, 110))
-            self.screen.blit(panel, (16, 16))
-            self.screen.blit(pygame.transform.smoothscale(p.character.avatar_full, (96, 96)), (26, 28))
-            self.text(self.font_med, ordinal(place), (135, 30), (255, 220, 60))
-            self.text(self.font_med, f"Lap {lap}/{self.laps}", (135, 76))
-            if p.sparkle_cooldown <= 0 and self.state == "race":
-                self.text(self.font, "Press a button for sparkles!", (SCREEN_W / 2, SCREEN_H - 40), (255, 230, 255), anchor="center")
-        else:
-            panel = pygame.Surface((300, 150), pygame.SRCALPHA)
-            panel.fill((0, 0, 0, 120))
-            self.screen.blit(panel, (16, 16))
-            self.text(self.font_med, ordinal(place), (30, 26), (255, 220, 60))
-            self.text(self.font_small, f"of {len(self.karts)}", (30 + self.font_med.size(ordinal(place))[0] + 8, 44))
-            self.text(self.font, f"Lap {lap}/{self.laps}", (170, 30))
-            self.text(self.font, f"Time  {fmt_time(self.race_time)}", (30, 80))
-            cur = self.race_time - p.lap_start if p.laps >= 0 else 0.0
-            self.text(self.font_small, f"Lap   {fmt_time(cur)}", (30, 112))
-            self.text(self.font_small, f"Best  {fmt_time(self.best_lap)}", (30, 136))
-
-            speed = abs(p.forward_speed)
-            frac = min(1.0, speed / (MAX_SPEED * BOOST_SPEED_FACTOR))
-            bar = pygame.Rect(SCREEN_W - 296, SCREEN_H - 60, 260, 22)
-            pygame.draw.rect(self.screen, (0, 0, 0), bar.inflate(6, 6), border_radius=6)
-            fill = bar.copy()
-            fill.width = int(bar.width * frac)
-            pygame.draw.rect(self.screen, (255, 170, 40) if p.boost_timer > 0 else (80, 200, 255), fill, border_radius=4)
-            self.text(self.font, f"{int(speed / 5)} km/h", (bar.right, bar.top - 8), anchor="bottomright")
-            if p.drifting:
-                ready = p.drift_charge >= 0.7
-                self.text(self.font, "DRIFT BOOST READY" if ready else "DRIFT!", (bar.left, bar.top - 8),
-                          (255, 140, 40) if ready else (80, 180, 255), anchor="bottomleft")
-            tangent = self.track.tangents[p.idx]
-            if self.countdown <= 0 and abs(angle_diff(p.heading, tangent)) > 2.2 and speed > 60:
-                self.text(self.font_med, "WRONG WAY!", (SCREEN_W / 2, 140), (255, 80, 80), anchor="center")
-            elif p.on_grass and speed > 50:
-                self.text(self.font, "Off track - get back on the road!", (SCREEN_W / 2, 140), (255, 230, 150), anchor="center")
-            self.text(self.font_small, self.input.device_name, (16, SCREEN_H - 30), (220, 220, 220))
-
-        mm = self.track.minimap
-        mx, my = SCREEN_W - mm.get_width() - 16, 16
-        self.screen.blit(mm, (mx, my))
-        s = self.track.minimap_scale
-        for k in self.karts:
-            pygame.draw.circle(self.screen, (0, 0, 0), (mx + k.x * s, my + k.y * s), 7 if k.is_player else 5)
-            pygame.draw.circle(self.screen, k.color, (mx + k.x * s, my + k.y * s), 6 if k.is_player else 4)
-
-        if self.countdown > 0:
-            n = math.ceil(self.countdown)
-            label = str(n) if n <= 3 else "Ready?"
-            self.text(self.font_huge, label, (SCREEN_W / 2, SCREEN_H / 2 - 90), (255, 230, 60), anchor="center")
-        elif self.message_timer > 0:
-            self.text(self.font_med, self.message, (SCREEN_W / 2, SCREEN_H / 2 - 130), (255, 255, 255), anchor="center")
-
-    def overlay(self, alpha=160):
-        s = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+    def overlay(self, surf, alpha=160):
+        s = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
         s.fill((20, 0, 40, alpha))
-        self.screen.blit(s, (0, 0))
+        surf.blit(s, (0, 0))
 
-    def draw_title(self):
-        self.overlay(140)
+    @staticmethod
+    def camera(kart, w, h):
+        cx = kart.x + kart.vx * 0.25 - w / 2
+        cy = kart.y + kart.vy * 0.25 - h / 2
+        return max(0, min(WORLD_W - w, cx)), max(0, min(WORLD_H - h, cy))
+
+    def draw_world(self, surf, focus):
+        w, h = surf.get_size()
+        cam_x, cam_y = self.camera(focus, w, h)
+        surf.blit(self.track.surface, (0, 0), pygame.Rect(cam_x, cam_y, w, h))
+        self.draw_particles(surf, cam_x, cam_y)
+        show_tags = len(self.humans) > 1
+        for k in sorted(self.karts, key=lambda k: (k is focus, k.y)):
+            k.draw(surf, cam_x, cam_y, self.time, show_tags)
+        return cam_x, cam_y
+
+    def draw_minimap(self, surf, pos, big=False):
+        mm = self.track.minimap_big if big else self.track.minimap
+        s = self.track.minimap_big_scale if big else self.track.minimap_scale
+        surf.blit(mm, pos)
+        mx, my = pos
+        for k in self.karts:
+            r = (9 if big else 6) if k.is_human else (6 if big else 4)
+            pygame.draw.circle(surf, (0, 0, 0), (mx + k.x * s, my + k.y * s), r + 1)
+            pygame.draw.circle(surf, k.player.color if k.is_human else k.color, (mx + k.x * s, my + k.y * s), r)
+
+    # --- per-player view ------------------------------------------------------------
+    def draw_view(self, surf, kart, right_side=False):
+        """One player's camera + HUD. Views on the right half mirror the HUD so the centre stays clear."""
+        self.draw_world(surf, kart)
+        w, h = surf.get_size()
+        compact = h < 500
+        big, med, norm, small = ((self.font_med, self.font, self.font_small, self.font_small) if compact
+                                 else (self.font_big, self.font_med, self.font, self.font_small))
+        place = self.standings_cache.index(kart) + 1
+        lap = min(self.laps, max(1, kart.laps + 1))
+        multi = len(self.humans) > 1
+
+        # Top-left panel
+        avatar = 56 if compact else 90
+        panel = pygame.Surface((avatar + (150 if compact else 250), avatar + 16), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 120))
+        if multi:
+            pygame.draw.rect(panel, kart.player.color, panel.get_rect(), 4)
+        px = w - panel.get_width() - 8 if right_side else 8
+        surf.blit(panel, (px, 8))
+        surf.blit(pygame.transform.smoothscale(kart.character.avatar_full, (avatar, avatar)), (px + 8, 16))
+        tx = px + 16 + avatar
+        label = f"{kart.player.label}  {ordinal(place)}" if multi else ordinal(place)
+        self.text(surf, med, label, (tx, 14), (255, 220, 60))
+        self.text(surf, norm, f"Lap {lap}/{self.laps}", (tx, 14 + med.get_height()))
+        if not kart.little and not compact:
+            self.text(surf, small, f"Time {fmt_time(self.race_time)}   Best {fmt_time(self.best_lap)}", (tx, 14 + med.get_height() + 28))
+
+        speed = abs(kart.forward_speed)
+        if not kart.little:
+            bw = 160 if compact else 240
+            bar_x = w - bw - 20 if (right_side or not multi) else 20
+            bar = pygame.Rect(bar_x, h - 34, bw, 16 if compact else 20)
+            pygame.draw.rect(surf, (0, 0, 0), bar.inflate(6, 6), border_radius=6)
+            fill = bar.copy()
+            fill.width = int(bar.width * min(1.0, speed / (MAX_SPEED * BOOST_SPEED_FACTOR)))
+            pygame.draw.rect(surf, (255, 170, 40) if kart.boost_timer > 0 else (80, 200, 255), fill, border_radius=4)
+            self.text(surf, small, f"{int(speed / 5)} km/h", (bar.left, bar.top - 4), anchor="bottomleft")
+            if kart.drifting:
+                ready = kart.drift_charge >= 0.7
+                self.text(surf, norm, "BOOST READY" if ready else "DRIFT!", (bar.right, bar.top - 4),
+                          (255, 140, 40) if ready else (80, 180, 255), anchor="bottomright")
+        elif kart.sparkle_cooldown <= 0 and kart.finished_time is None and self.countdown <= 0:
+            self.text(surf, small, "Press a button for sparkles!", (w / 2, h - 22), (255, 230, 255), anchor="center")
+
+        msg_y = h * 0.3
+        if kart.finished_time is not None:
+            self.text(surf, big, f"Finished {ordinal(self.finish_order.index(kart) + 1)}!", (w / 2, h / 2 - 30),
+                      (255, 220, 60), anchor="center")
+            if any(hk.finished_time is None for hk in self.humans):
+                self.text(surf, norm, "Waiting for the others...", (w / 2, h / 2 + 20), anchor="center")
+        elif kart.message_timer > 0:
+            self.text(surf, med, kart.message, (w / 2, msg_y), anchor="center")
+        elif self.finish_order and any(h.finished_time is not None for h in self.humans):
+            first = min(h.finished_time for h in self.humans if h.finished_time is not None)
+            left = FINISH_GRACE_SECONDS - (self.race_time - first)
+            if left < 15:
+                self.text(surf, med, f"Hurry! {int(left) + 1}", (w / 2, msg_y), (255, 200, 80), anchor="center")
+        elif not kart.little and self.countdown <= 0:
+            if abs(angle_diff(kart.heading, self.track.tangents[kart.idx])) > 2.2 and speed > 60:
+                self.text(surf, med, "WRONG WAY!", (w / 2, msg_y), (255, 80, 80), anchor="center")
+            elif kart.on_grass and speed > 50:
+                self.text(surf, norm, "Off track!", (w / 2, msg_y), (255, 230, 150), anchor="center")
+
+        if not self.input.is_connected(kart.player.device):
+            self.text(surf, norm, "Controller unplugged - plug one in!", (w / 2, h - 60), (255, 120, 120), anchor="center")
+        if not multi:
+            self.draw_minimap(surf, (w - self.track.minimap.get_width() - 12, 12))
+            self.text(surf, small, self.input.device_name(kart.player.device), (12, h - 26), (220, 220, 220))
+
+    def draw_standings_panel(self, surf):
+        """Fills the spare quarter in 3-player split-screen."""
+        surf.fill((35, 25, 60))
+        w, h = surf.get_size()
+        mm = self.track.minimap_big
+        scale = min((w * 0.55) / mm.get_width(), (h - 20) / mm.get_height())
+        small = pygame.transform.smoothscale(mm, (int(mm.get_width() * scale), int(mm.get_height() * scale)))
+        surf.blit(small, (w - small.get_width() - 10, (h - small.get_height()) // 2))
+        s = self.track.minimap_big_scale * scale
+        ox, oy = w - small.get_width() - 10, (h - small.get_height()) // 2
+        for k in self.karts:
+            col = k.player.color if k.is_human else k.color
+            pygame.draw.circle(surf, (0, 0, 0), (ox + k.x * s, oy + k.y * s), 7)
+            pygame.draw.circle(surf, col, (ox + k.x * s, oy + k.y * s), 6)
+        y = 14
+        for i, k in enumerate(self.standings_cache):
+            surf.blit(pygame.transform.smoothscale(k.character.avatar_full, (34, 34)), (50, y))
+            self.text(surf, self.font_small, ordinal(i + 1), (12, y + 9))
+            name = f"{k.player.label} {k.name}" if k.is_human else k.name
+            self.text(surf, self.font_small, name, (90, y + 9), k.player.color if k.is_human else (255, 255, 255))
+            y += 40
+
+    def draw_race(self):
+        views = view_rects(len(self.humans))
+        self.screen.fill((10, 10, 20))
+        for k in self.karts:
+            k.prepare_sprite()
+        for rect, kart in zip(views, self.humans):
+            self.draw_view(self.screen.subsurface(rect), kart, right_side=rect.left > 0)
+        n = len(self.humans)
+        if n == 3:
+            hw, hh = views[0].size
+            self.draw_standings_panel(self.screen.subsurface(pygame.Rect(SCREEN_W - hw, SCREEN_H - hh, hw, hh)))
+        elif n in (2, 4):
+            mm = self.track.minimap
+            y = SCREEN_H - mm.get_height() - 8 if n == 2 else SCREEN_H // 2 - mm.get_height() // 2
+            pos = (SCREEN_W // 2 - mm.get_width() // 2, y)
+            self.draw_minimap(self.screen, pos)
+        if self.countdown > 0:
+            c = math.ceil(self.countdown)
+            self.text(self.screen, self.font_huge, str(c) if c <= 3 else "Ready?", (SCREEN_W / 2, SCREEN_H / 2),
+                      (255, 230, 60), anchor="center")
+        elif self.banner_timer > 0:
+            self.text(self.screen, self.font_huge, self.banner, (SCREEN_W / 2, SCREEN_H / 2), (255, 255, 255), anchor="center")
+
+    # --- menus ------------------------------------------------------------------
+    def draw_menu_background(self):
+        k = self.karts[0]
+        self.screen.blit(self.track.surface, (0, 0), pygame.Rect(*self.camera(k, SCREEN_W, SCREEN_H), SCREEN_W, SCREEN_H))
+
+    def draw_lobby(self):
+        self.draw_menu_background()
+        self.overlay(self.screen, 170)
+        S = self.screen
         cx = SCREEN_W / 2
-        self.text(self.font_huge, "KART RUSH", (cx, 90), (255, 210, 60), anchor="center")
-        options = [
-            ("Little Racer", "Goes by itself - just steer! Bouncy walls and sparkles",
-             [self.roster[0], self.roster[2]], (255, 140, 200)),
-            ("Big Racer", "Full control: gas, brake and drift boosts. Beat everyone!",
-             [self.roster[7], self.roster[9]], (110, 180, 255)),
+        self.text(S, self.font_big, "KART RUSH", (cx, 52), (255, 210, 60), anchor="center")
+        self.text(S, self.font, "Up to 4 players: press A on your controller (or Enter / Space on the keyboard) to join!",
+                  (cx, 110), anchor="center")
+        pw, ph, gap = 290, 500, 20
+        left = cx - (4 * pw + 3 * gap) / 2
+        for slot in range(MAX_HUMANS):
+            rect = pygame.Rect(left + slot * (pw + gap), 145, pw, ph)
+            player = next((p for p in self.players if p.slot == slot), None)
+            box = pygame.Surface(rect.size, pygame.SRCALPHA)
+            if player is None:
+                box.fill((255, 255, 255, 30))
+                S.blit(box, rect)
+                pygame.draw.rect(S, (200, 200, 200), rect, 2, border_radius=12)
+                self.text(S, self.font_med, f"P{slot + 1}", (rect.centerx, rect.top + 50), PLAYER_COLORS[slot], anchor="center")
+                if (pygame.time.get_ticks() // 600) % 2 == 0 or slot != len(self.players):
+                    self.text(S, self.font, "Press A to join", (rect.centerx, rect.centery), anchor="center")
+                continue
+            ch = self.roster[player.char_index]
+            box.fill((*ch.body, 200))
+            S.blit(box, rect)
+            pygame.draw.rect(S, player.color, rect, 6, border_radius=12)
+            self.text(S, self.font_med, player.label, (rect.left + 16, rect.top + 12), player.color)
+            self.text(S, self.font_small, self.input.device_name(player.device)[:30], (rect.left + 16, rect.top + 52),
+                      (240, 240, 240))
+            bob = 0 if player.ready else math.sin(self.time * 6 + slot) * 6
+            img = pygame.transform.smoothscale(ch.avatar_full, (180, 180))
+            S.blit(img, img.get_rect(center=(rect.centerx, rect.top + 160 + bob)))
+            self.text(S, self.font_med, ch.name, (rect.centerx, rect.top + 275), anchor="center")
+            if not player.ready:
+                for sx in (-1, 1):  # < > arrows
+                    ax = rect.centerx + sx * 125
+                    pygame.draw.polygon(S, (255, 255, 255), [(ax, rect.top + 145), (ax, rect.top + 175), (ax + sx * 16, rect.top + 160)])
+            mode_rect = pygame.Rect(0, 0, pw - 40, 64)
+            mode_rect.center = (rect.centerx, rect.top + 345)
+            pygame.draw.rect(S, (255, 120, 190) if player.little else (80, 140, 240), mode_rect, border_radius=10)
+            pygame.draw.rect(S, (255, 255, 255), mode_rect, 2, border_radius=10)
+            self.text(S, self.font, "Little Racer" if player.little else "Big Racer", (mode_rect.centerx, mode_rect.top + 20), anchor="center")
+            self.text(S, self.font_small, "easy - kart helps steer" if player.little else "full control + drifting",
+                      (mode_rect.centerx, mode_rect.top + 46), (240, 240, 240), anchor="center")
+            if player.ready:
+                self.text(S, self.font_med, "READY!", (rect.centerx, rect.bottom - 70), (120, 255, 120), anchor="center")
+                self.text(S, self.font_small, "B to change", (rect.centerx, rect.bottom - 32), anchor="center")
+            else:
+                self.text(S, self.font_small, "Left/Right: racer   Up/Down: mode", (rect.centerx, rect.bottom - 82), anchor="center")
+                self.text(S, self.font_small, "A: ready   B: leave", (rect.centerx, rect.bottom - 56), anchor="center")
+        if self.players and all(p.ready for p in self.players):
+            self.text(S, self.font_med, "Everyone ready! Press A for race settings", (cx, SCREEN_H - 40), (120, 255, 120), anchor="center")
+        else:
+            self.text(S, self.font_small, "Keyboard players: Arrows + Enter (Backspace = back) or WASD + Space (Q = back)  ·  Esc pause  ·  F11 fullscreen",
+                      (cx, SCREEN_H - 36), (210, 210, 210), anchor="center")
+
+    def settings_rows(self):
+        max_ai = MAX_RACERS - len(self.players)
+        return [
+            ("Computer racers", f"{self.ai_count}", f"0 - {max_ai}"),
+            ("Computer difficulty", DIFFICULTIES[self.ai_difficulty], "Easy / Medium / Hard"),
+            ("Laps", f"{self.laps}", "1 - 5"),
         ]
-        for i, (title, desc, icons, color) in enumerate(options):
-            selected = i == self.mode_index
-            rect = pygame.Rect(0, 0, 820, 130)
-            rect.center = (cx, 230 + i * 160)
-            if selected:
-                rect.inflate_ip(24 + math.sin(self.time * 6) * 6, 12)
-            box = pygame.Surface(rect.size, pygame.SRCALPHA)
-            box.fill((*color, 230 if selected else 120))
-            self.screen.blit(box, rect)
-            pygame.draw.rect(self.screen, (255, 255, 255) if selected else (0, 0, 0), rect, 5 if selected else 2, border_radius=8)
-            for k, ch in enumerate(icons):
-                self.screen.blit(pygame.transform.smoothscale(ch.avatar_full, (100, 100)), (rect.left + 15 + k * 80, rect.top + 15))
-            self.text(self.font_big if selected else self.font_med, title, (rect.left + 200, rect.top + 18))
-            self.text(self.font, desc, (rect.left + 200, rect.bottom - 40), (255, 255, 255))
-        self.text(self.font, "Up / Down to choose   ·   A / Cross or Enter to pick", (cx, 560), anchor="center")
-        self.text(self.font_small, "Big Racer: steer = left stick · gas = RT/A · brake = LT/B · drift = RB/X · pause = Start",
-                  (cx, 610), (230, 230, 230), anchor="center")
-        self.text(self.font_small, f"Input: {self.input.device_name}   ·   F11 fullscreen", (cx, SCREEN_H - 40),
-                  (200, 200, 200), anchor="center")
 
-    def draw_select(self):
-        self.overlay(170)
+    def draw_settings(self):
+        self.draw_menu_background()
+        self.overlay(self.screen, 180)
+        S = self.screen
         cx = SCREEN_W / 2
-        self.text(self.font_big, "Choose your racer!", (cx, 70), (255, 230, 90), anchor="center")
-        cols, card_w, card_h, gap = 5, 210, 230, 20
-        left = cx - (cols * card_w + (cols - 1) * gap) / 2
-        for i, ch in enumerate(self.roster):
-            col, row = i % cols, i // cols
-            rect = pygame.Rect(left + col * (card_w + gap), 130 + row * (card_h + gap), card_w, card_h)
-            selected = i == self.char_index
+        self.text(S, self.font_big, "Race settings", (cx, 80), (255, 210, 60), anchor="center")
+        for i, (label, value, hint) in enumerate(self.settings_rows()):
+            rect = pygame.Rect(0, 0, 760, 90)
+            rect.center = (cx, 210 + i * 110)
+            selected = i == self.settings_row
             box = pygame.Surface(rect.size, pygame.SRCALPHA)
-            box.fill((*ch.body, 235 if selected else 110))
-            self.screen.blit(box, rect)
-            pygame.draw.rect(self.screen, (255, 255, 255) if selected else (30, 30, 30), rect, 6 if selected else 2, border_radius=10)
-            size = 170 if selected else 140
-            bob = math.sin(self.time * 7) * 6 if selected else 0
-            img = pygame.transform.smoothscale(ch.avatar_full, (size, size))
-            self.screen.blit(img, img.get_rect(center=(rect.centerx, rect.top + 95 + bob)))
-            self.text(self.font_med if selected else self.font, ch.name, (rect.centerx, rect.bottom - 26), anchor="center")
-        mode = "Little Racer" if self.little else "Big Racer"
-        self.text(self.font, f"{mode}  ·  Stick / D-pad to choose  ·  A / Enter to race  ·  B / Backspace back",
-                  (cx, SCREEN_H - 40), anchor="center")
+            box.fill((110, 180, 255, 210) if selected else (255, 255, 255, 40))
+            S.blit(box, rect)
+            pygame.draw.rect(S, (255, 255, 255) if selected else (120, 120, 120), rect, 4 if selected else 2, border_radius=10)
+            self.text(S, self.font_med, label, (rect.left + 30, rect.centery), anchor="midleft")
+            self.text(S, self.font_med, f"<  {value}  >" if selected else value, (rect.right - 130, rect.centery), (255, 255, 120), anchor="center")
+            if selected:
+                self.text(S, self.font_small, hint, (rect.right - 130, rect.bottom - 12), (230, 230, 230), anchor="center")
+        total = len(self.players) + self.ai_count
+        y = 560
+        self.text(S, self.font, f"{total} racers:", (cx - 300, y), anchor="midright")
+        x = cx - 280
+        for p in self.players:
+            S.blit(pygame.transform.smoothscale(self.roster[p.char_index].avatar_full, (56, 56)), (x, y - 28))
+            self.text(S, self.font_small, p.label, (x + 28, y + 36), p.color, anchor="center")
+            x += 66
+        for _ in range(self.ai_count):
+            pygame.draw.circle(S, (200, 200, 200), (x + 28, y), 24, 3)
+            self.text(S, self.font, "?", (x + 28, y), anchor="center")
+            self.text(S, self.font_small, "CPU", (x + 28, y + 36), (200, 200, 200), anchor="center")
+            x += 66
+        self.text(S, self.font_med, "Up/Down: choose   Left/Right: change   A: GO!   B: back", (cx, SCREEN_H - 40), anchor="center")
 
     def draw_pause(self):
-        self.overlay()
+        self.overlay(self.screen)
         cx, cy = SCREEN_W / 2, SCREEN_H / 2
-        self.text(self.font_big, "PAUSED", (cx, cy - 100), anchor="center")
-        self.text(self.font, "A / Enter  -  keep racing", (cx, cy), anchor="center")
-        self.text(self.font, "Y / R  -  restart race", (cx, cy + 40), anchor="center")
-        self.text(self.font, "B / Backspace  -  back to title", (cx, cy + 80), anchor="center")
+        S = self.screen
+        self.text(S, self.font_big, "PAUSED", (cx, cy - 100), anchor="center")
+        self.text(S, self.font, "A / Enter  -  keep racing", (cx, cy), anchor="center")
+        self.text(S, self.font, "Y / R  -  restart race", (cx, cy + 40), anchor="center")
+        self.text(S, self.font, "B / Backspace  -  back to player select", (cx, cy + 80), anchor="center")
 
     def draw_results(self):
-        self.overlay(130)
+        self.overlay(self.screen, 215)
+        S = self.screen
         cx = SCREEN_W / 2
-        place = self.finish_order.index(self.player) + 1
-        if self.little:
-            title = "Hooray! You did it!"
-            sub = "You won!" if place == 1 else f"You came {ordinal(place)}!"
-            for k in range(5):
-                draw_star(self.screen, (255, 220, 60), cx - 200 + k * 100, 175 + math.sin(self.time * 5 + k) * 8, 34)
-        else:
-            title = "YOU WIN!" if place == 1 else f"You finished {ordinal(place)}"
-            sub = None
-        self.text(self.font_big, title, (cx, 90), (255, 210, 60), anchor="center")
-        if sub:
-            self.text(self.font_med, sub, (cx, 240), anchor="center")
-        y = 300 if self.little else 210
-        for i, k in enumerate(self.standings()):
-            color = (255, 255, 120) if k.is_player else (255, 255, 255)
-            self.text(self.font_med, ordinal(i + 1), (cx - 280, y), color, anchor="midleft")
-            self.screen.blit(pygame.transform.smoothscale(k.character.avatar_full, (52, 52)), (cx - 200, y - 26))
-            self.text(self.font_med, k.name, (cx - 130, y), color, anchor="midleft")
-            if not self.little:
-                self.text(self.font_med, fmt_time(k.finished_time) if k.finished_time else "racing...",
-                          (cx + 280, y), color, anchor="midright")
-            y += 58
-        if not self.little:
-            laps = "   ".join(fmt_time(t) for t in self.player.lap_times)
-            self.text(self.font, f"Your laps:  {laps}", (cx, y + 15), anchor="center")
-            self.text(self.font, f"Best lap ever:  {fmt_time(self.best_lap)}", (cx, y + 52), anchor="center")
-        self.text(self.font_med, "A / Enter  race again    ·    B  menu", (cx, SCREEN_H - 60), anchor="center")
-        self.draw_particles(*self.camera())  # confetti on top of the results
+        winner = self.standings_cache[0]
+        title = f"{winner.player.label} {winner.name} wins!" if winner.is_human else f"{winner.name} wins!"
+        self.text(S, self.font_big, title, (cx, 60), (255, 210, 60), anchor="center")
+        if any(k.little for k in self.humans):
+            for i in range(5):
+                draw_star(S, (255, 220, 60), cx - 200 + i * 100, 130 + math.sin(self.time * 5 + i) * 6, 26)
+            self.text(S, self.font, "Hooray! Everyone did great!", (cx, 172), anchor="center")
+        y = 215
+        for i, k in enumerate(self.standings_cache):
+            color = k.player.color if k.is_human else (255, 255, 255)
+            self.text(S, self.font, ordinal(i + 1), (cx - 300, y), color, anchor="midleft")
+            S.blit(pygame.transform.smoothscale(k.character.avatar_full, (46, 46)), (cx - 230, y - 23))
+            name = f"{k.player.label}  {k.name}" if k.is_human else f"{k.name}  (CPU)"
+            self.text(S, self.font, name, (cx - 170, y), color, anchor="midleft")
+            self.text(S, self.font, fmt_time(k.finished_time) if k.finished_time else "racing...", (cx + 300, y),
+                      color, anchor="midright")
+            y += 50
+        self.text(S, self.font_small, f"Best lap ever: {fmt_time(self.best_lap)}", (cx, SCREEN_H - 75), anchor="center")
+        self.text(S, self.font_med, "A  race again    ·    B  player select", (cx, SCREEN_H - 38), anchor="center")
+
+    # --- menu logic ----------------------------------------------------------------
+    def update_lobby(self, frames):
+        for device, f in frames.items():
+            player = next((p for p in self.players if p.device == device), None)
+            if player is None:
+                if "confirm" in f.pressed and len(self.players) < MAX_HUMANS:
+                    slot = min(set(range(MAX_HUMANS)) - {p.slot for p in self.players})
+                    taken = {p.char_index for p in self.players}
+                    default = next(i for i in [0, 5, 2, 7, 1, 6, 3, 8, 4, 9] if i not in taken)
+                    self.players.append(Player(slot, device, default))
+                    self.players.sort(key=lambda p: p.slot)
+                    self.input.rumble(device, 0.4, 0.4, 150)
+                continue
+            if player.ready:
+                if "back" in f.pressed:
+                    player.ready = False
+                elif "confirm" in f.pressed and all(p.ready for p in self.players):
+                    self.enter_settings()
+                    return
+                continue
+            n = len(self.roster)
+            if "left" in f.pressed:
+                player.char_index = (player.char_index - 1) % n
+            elif "right" in f.pressed:
+                player.char_index = (player.char_index + 1) % n
+            elif "up" in f.pressed or "down" in f.pressed:
+                player.little = not player.little
+            elif "confirm" in f.pressed:
+                player.ready = True
+                self.input.rumble(device, 0.3, 0.6, 120)
+            elif "back" in f.pressed:
+                self.players.remove(player)
+
+    def enter_settings(self):
+        self.state = "settings"
+        self.settings_row = 0
+        max_ai = MAX_RACERS - len(self.players)
+        if not self.settings_touched:
+            self.ai_count = max(0, 4 - len(self.players))
+            self.laps = 2 if all(p.little for p in self.players) else 3
+        self.ai_count = min(self.ai_count, max_ai)
+
+    def update_settings(self, pressed):
+        if "up" in pressed:
+            self.settings_row = (self.settings_row - 1) % 3
+        elif "down" in pressed:
+            self.settings_row = (self.settings_row + 1) % 3
+        elif "left" in pressed or "right" in pressed:
+            d = 1 if "right" in pressed else -1
+            self.settings_touched = True
+            if self.settings_row == 0:
+                self.ai_count = max(0, min(MAX_RACERS - len(self.players), self.ai_count + d))
+            elif self.settings_row == 1:
+                self.ai_difficulty = max(0, min(2, self.ai_difficulty + d))
+            else:
+                self.laps = max(1, min(5, self.laps + d))
+        elif "confirm" in pressed:
+            self.new_race()
+            self.state = "race"
+        elif "back" in pressed:
+            self.back_to_lobby()
+
+    def back_to_lobby(self):
+        for p in self.players:
+            p.ready = False
+        self.state = "lobby"
+
+    def rebind_unplugged(self):
+        """If someone's controller was unplugged, give them the next new pad that shows up."""
+        used = {p.device for p in self.players}
+        free = [d for d in self.input.pad_ids if d not in used]
+        for p in self.players:
+            if not self.input.is_connected(p.device) and free:
+                p.device = free.pop(0)
 
     # --- main loop ----------------------------------------------------------------
     def step(self, dt):
@@ -862,33 +1138,21 @@ class Game:
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
                 pygame.display.toggle_fullscreen()
             self.input.handle_event(event)
-        inp = self.input.poll()
-        pressed = inp.pressed
+        self.rebind_unplugged()
+        frames = self.input.poll()
+        # Menus outside the lobby can be driven by any joined player (or the keyboard).
+        menu_devices = {p.device for p in self.players} | {"kb_arrows", "kb_wasd"}
+        pressed = set().union(*(f.pressed for d, f in frames.items() if d in menu_devices))
 
-        if self.state == "title":
-            if pressed & {"up", "down", "left", "right"}:
-                self.mode_index = 1 - self.mode_index
-            elif "confirm" in pressed:
-                self.little = self.mode_index == 0
-                self.state = "select"
-        elif self.state == "select":
-            cols = 5
-            if "left" in pressed:
-                self.char_index = (self.char_index - 1) % len(self.roster)
-            elif "right" in pressed:
-                self.char_index = (self.char_index + 1) % len(self.roster)
-            elif "up" in pressed or "down" in pressed:
-                self.char_index = (self.char_index + cols) % len(self.roster)
-            elif "confirm" in pressed:
-                self.new_race()
-                self.state = "race"
-            elif "back" in pressed:
-                self.state = "title"
+        if self.state == "lobby":
+            self.update_lobby(frames)
+        elif self.state == "settings":
+            self.update_settings(pressed)
         elif self.state == "race":
             if "pause" in pressed:
                 self.state = "paused"
             else:
-                self.update_race(dt, inp)
+                self.update_race(dt, frames)
         elif self.state == "paused":
             if "confirm" in pressed or "pause" in pressed:
                 self.state = "race"
@@ -896,25 +1160,26 @@ class Game:
                 self.new_race()
                 self.state = "race"
             elif "back" in pressed:
-                self.state = "title"
-        elif self.state == "finished":
-            self.update_race(dt, inp)  # let the rivals cross the line in the background
-            if "confirm" in pressed or "restart" in pressed:
+                self.back_to_lobby()
+        elif self.state == "results":
+            self.update_race(dt, frames)  # the computer racers keep crossing the line
+            if self.time - self.results_since < 2.0:
+                pass  # ignore button mashing right as the race ends
+            elif "confirm" in pressed or "restart" in pressed:
                 self.new_race()
                 self.state = "race"
             elif "back" in pressed:
-                self.state = "select"
+                self.back_to_lobby()
 
-        self.draw_world()
-        if self.state == "title":
-            self.draw_title()
-        elif self.state == "select":
-            self.draw_select()
+        if self.state == "lobby":
+            self.draw_lobby()
+        elif self.state == "settings":
+            self.draw_settings()
         else:
-            self.draw_hud()
+            self.draw_race()
             if self.state == "paused":
                 self.draw_pause()
-            elif self.state == "finished":
+            elif self.state == "results":
                 self.draw_results()
 
     def run(self):
