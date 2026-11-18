@@ -21,8 +21,10 @@ FPS = 60
 MAX_HUMANS = 4
 MAX_RACERS = 8
 DIFFICULTIES = ["Easy", "Medium", "Hard"]
-AI_SKILL = [0.70, 0.88, 1.00]       # rival top speed for each difficulty
-AI_CATCH_UP = [0.03, 0.05, 0.08]    # how much rivals speed up when behind
+AI_SKILL = [0.58, 0.72, 0.88]       # rival top speed for each difficulty (Easy / Medium / Hard)
+AI_CATCH_UP = [0.00, 0.03, 0.06]    # how much rivals speed up when behind
+AI_EASE_OFF = [0.15, 0.12, 0.08]    # how much rivals slow down when ahead
+LITTLE_DEFAULT_CHARACTER = 0   # roster index of the little sister's racer
 PLAYER_COLORS = [(255, 80, 80), (70, 150, 255), (80, 210, 90), (255, 200, 40)]
 TRACK_WIDTH = 180
 CURB_WIDTH = 12
@@ -36,7 +38,7 @@ TRACK_POINTS = [
     (2500, 1400), (2350, 1700), (2700, 1900), (2550, 2120), (1900, 2080),
     (1500, 1750), (1150, 1950), (700, 2050), (450, 1850),
 ]
-BOOST_PAD_FRACTIONS = [0.12, 0.47, 0.83]
+BOOST_PADS = 3                  # placed automatically on the straightest stretches
 
 # Physics tuning
 MAX_SPEED = 540.0
@@ -55,9 +57,8 @@ KART_RADIUS = 22
 LITTLE_PLAYER_SKILL = 0.78      # top speed vs. Big Racer
 LITTLE_ASSIST = 0.55            # how much the game steers for her
 LITTLE_INPUT = 0.9              # how much her stick counts
-WALL_BOUNCE = 0.7               # how bouncy the walls are
-WRONG_WAY_SECONDS = 2.0         # going the wrong way this long -> kart turns itself around
-AUTO_TURN_RATE = 3.0            # rad/s while turning around
+WALL_BOUNCE = 0.25              # walls guide the kart along rather than bouncing it back
+WRONG_WAY_SECONDS = 1.5         # going the wrong way this long -> magic poof, facing the right way
 SPARKLE_COOLDOWN = 1.2
 FINISH_GRACE_SECONDS = 45     # race ends this long after the first human finishes
 
@@ -122,7 +123,7 @@ class Track:
             ax, ay = self.center[i - 1]
             bx, by = self.center[(i + 1) % self.n]
             self.tangents.append(math.atan2(by - ay, bx - ax))
-        self.boost_pads = [int(f * self.n) for f in BOOST_PAD_FRACTIONS]
+        self.boost_pads = self._place_boost_pads()
         rng = random.Random(7)
         self.obstacles = []
         kinds = ["tree", "tree", "lollipop", "gumdrop", "mushroom"]
@@ -133,6 +134,22 @@ class Track:
         self.surface = self._render(rng)
         self.minimap, self.minimap_scale = self._render_minimap(220)
         self.minimap_big, self.minimap_big_scale = self._render_minimap(560)
+
+    def _place_boost_pads(self):
+        """Put the speed arrows where the road ahead is straightest, so a boost never
+        launches anyone into a bend (which felt like the arrows slowed you down)."""
+        ahead = 70  # look ~840 px down the road
+        turn = [sum(abs(angle_diff(self.tangents[(i + j + 1) % self.n], self.tangents[(i + j) % self.n]))
+                    for j in range(-10, ahead)) for i in range(self.n)]
+        pads = []
+        for i in sorted(range(self.n), key=lambda i: turn[i]):
+            if i < 40 or i > self.n - 40:
+                continue  # keep the start line clear
+            if all(min(abs(i - p), self.n - abs(i - p)) > self.n // (BOOST_PADS + 1) for p in pads):
+                pads.append(i)
+            if len(pads) == BOOST_PADS:
+                break
+        return sorted(pads)
 
     def point(self, i):
         return self.center[i % self.n]
@@ -285,8 +302,9 @@ class Track:
         for j in range(3):
             base = (x + tx * (j * 24 - 24), y + ty * (j * 24 - 24))
             tip = (base[0] + tx * 22, base[1] + ty * 22)
-            left = (base[0] + nx * 32, base[1] + ny * 32)
-            right = (base[0] - nx * 32, base[1] - ny * 32)
+            wide = TRACK_WIDTH / 2 - 18
+            left = (base[0] + nx * wide - tx * 10, base[1] + ny * wide - ty * 10)
+            right = (base[0] - nx * wide - tx * 10, base[1] - ny * wide - ty * 10)
             notch = (base[0] + tx * 8, base[1] + ty * 8)
             poly = [T(*left), T(*tip), T(*right), T(*notch)]
             pygame.draw.polygon(layer, (255, 214, 40), poly)
@@ -398,14 +416,14 @@ class Kart:
         if self.on_grass:
             top *= GRASS_SPEED_FACTOR
 
-        if throttle > 0:
-            fwd += ACCEL * throttle * (1.6 if self.boost_timer > 0 else 1.0) * dt
+        if fwd > top:  # over the limit (a boost just ended): ease off; grass still bites quickly
+            fwd = max(top, fwd - (900 if self.on_grass else 240) * dt)
+        elif throttle > 0:  # the engine only pushes up to top speed
+            fwd = min(top, fwd + ACCEL * throttle * (1.6 if self.boost_timer > 0 else 1.0) * dt)
         if brake > 0:
             fwd -= (BRAKE if fwd > 0 else ACCEL * 0.6) * brake * dt
         if throttle == 0 and brake == 0:
             fwd *= math.exp(-0.9 * dt)
-        if fwd > top:
-            fwd = max(top, fwd - 900 * dt)
         fwd = max(-REVERSE_MAX, fwd)
 
         self.drifting = drift and fwd > 220 and abs(steer) > 0.3 and not self.on_grass
@@ -432,31 +450,44 @@ class Kart:
 
         dist, self.idx = track.distance_to_center(self.x, self.y, self.idx)
         bounced = False
-        limit = TRACK_WIDTH / 2 + CURB_WIDTH - KART_RADIUS * 0.5
-        if walls and dist > limit:
-            cx, cy = track.point(self.idx)
-            nx, ny = (self.x - cx) / dist, (self.y - cy) / dist
-            self.x, self.y = cx + nx * limit, cy + ny * limit
-            vn = self.vx * nx + self.vy * ny
-            if vn > 0:
-                self.vx -= (1 + WALL_BOUNCE) * vn * nx
-                self.vy -= (1 + WALL_BOUNCE) * vn * ny
-                bounced = vn > 40
-            # Nudge the nose back along the road so she isn't stuck against the wall.
-            self.heading += angle_diff(track.tangents[self.idx], self.heading) * 0.25
+        if walls:
+            bounced = self.keep_on_track(track, dist)
         self.on_grass = (not walls) and dist > TRACK_WIDTH / 2 + CURB_WIDTH
 
         # Boost pads
         pad_hit = None
-        for p in track.boost_pads:
+        for p in track.boost_pads:  # the arrows cover most of the road's width
             px, py = track.point(p)
-            if (px - self.x) ** 2 + (py - self.y) ** 2 < 55 ** 2:
+            ta = track.tangents[p]
+            along = (self.x - px) * math.cos(ta) + (self.y - py) * math.sin(ta)
+            across = -(self.x - px) * math.sin(ta) + (self.y - py) * math.cos(ta)
+            if -45 < along < 45 and abs(across) < TRACK_WIDTH / 2 - 10:
                 pad_hit = p
         if pad_hit is not None and pad_hit != self.last_pad:
             self.boost_timer = max(self.boost_timer, 1.1)
         self.last_pad = pad_hit
         self.message_timer -= dt
         return bounced
+
+    def keep_on_track(self, track, dist=None):
+        """Little Racer's invisible walls: the whole kart stays on the road."""
+        if dist is None:
+            dist, self.idx = track.distance_to_center(self.x, self.y, self.idx)
+        if dist > TRACK_WIDTH:  # lost track of where we are (e.g. pushed hard): search everywhere
+            dist, self.idx = track.distance_to_center(self.x, self.y)
+        limit = TRACK_WIDTH / 2 + CURB_WIDTH - KART_RADIUS * 0.9
+        if dist <= limit or dist == 0:
+            return False
+        cx, cy = track.point(self.idx)
+        nx, ny = (self.x - cx) / dist, (self.y - cy) / dist
+        self.x, self.y = cx + nx * limit, cy + ny * limit
+        vn = self.vx * nx + self.vy * ny
+        if vn > 0:  # remove the push into the wall, keep the speed along it
+            self.vx -= (1 + WALL_BOUNCE) * vn * nx
+            self.vy -= (1 + WALL_BOUNCE) * vn * ny
+        # Steer the nose back along the road so she glides on instead of sticking.
+        self.heading += angle_diff(track.tangents[self.idx], self.heading) * 0.35
+        return vn > 60
 
     def update_lap(self, prev_idx, n, race_time):
         """Returns True if a lap was just completed."""
@@ -498,10 +529,11 @@ class Kart:
 
 
 class Particle:
-    __slots__ = ("x", "y", "vx", "vy", "life", "max_life", "color", "size", "star")
+    __slots__ = ("x", "y", "vx", "vy", "life", "max_life", "color", "size", "star", "puff")
 
-    def __init__(self, x, y, vx, vy, life, color, size, star=False):
+    def __init__(self, x, y, vx, vy, life, color, size, star=False, puff=False):
         self.x, self.y, self.vx, self.vy = x, y, vx, vy
+        self.puff = puff
         self.life = self.max_life = life
         self.color, self.size, self.star = color, size, star
 
@@ -553,7 +585,7 @@ class Game:
         self.best_lap = self._load_best()
         self.players = []
         self.ai_count = 3
-        self.ai_difficulty = 1
+        self.ai_difficulty = 0
         self.laps = 3
         self.settings_row = 0
         self.settings_touched = False
@@ -649,32 +681,24 @@ class Game:
         target = sum(h.progress(n) for h in self.humans) / len(self.humans)
         gap = target - kart.progress(n)
         base = kart.base_skill
-        kart.skill = clamp(base + 0.0003 * clamp(gap, -300, 300), base - 0.1, base + AI_CATCH_UP[self.ai_difficulty])
+        d = self.ai_difficulty
+        kart.skill = clamp(base + 0.0004 * clamp(gap, -400, 300), base - AI_EASE_OFF[d], base + AI_CATCH_UP[d])
 
     # --- Little Racer helpers ---------------------------------------------------------
     def little_controls(self, kart, inp, dt):
         """Toddler mode: auto-go, steering help, turn-around and sparkle boost."""
         tangent = self.track.tangents[kart.idx]
         off = angle_diff(tangent, kart.heading)
+        along = kart.vx * math.cos(tangent) + kart.vy * math.sin(tangent)  # speed down the track
         slow = abs(kart.forward_speed) < 60
-        if abs(off) > 1.8 or (slow and abs(off) > 0.9):
+        if along < -40 or abs(off) > 1.8 or (slow and abs(off) > 0.9):
             kart.wrong_way_timer += dt
         else:
-            kart.wrong_way_timer = max(0.0, kart.wrong_way_timer - dt * 2)
-        if kart.wrong_way_timer > WRONG_WAY_SECONDS and not kart.auto_turning:
-            kart.auto_turning = True
-            kart.say("Turning around!", 1.5)
-            self.rumble(kart, 0.2, 0.4, 150)
-
-        if kart.auto_turning:
-            kart.heading += clamp(off, -AUTO_TURN_RATE * dt, AUTO_TURN_RATE * dt)
-            if abs(off) < 0.25:
-                kart.auto_turning = False
-                kart.wrong_way_timer = 0.0
-            steer = 0.0
-        else:
-            assist, _, _ = self.ai_drive(kart, lane=0.0)
-            steer = clamp(assist * LITTLE_ASSIST + inp.steer * LITTLE_INPUT)
+            kart.wrong_way_timer = max(0.0, kart.wrong_way_timer - dt)
+        if kart.wrong_way_timer > WRONG_WAY_SECONDS:
+            self.magic_turn_around(kart)
+        assist, _, _ = self.ai_drive(kart, lane=0.0)
+        steer = clamp(assist * LITTLE_ASSIST + inp.steer * LITTLE_INPUT)
 
         kart.sparkle_cooldown -= dt
         if "boost" in inp.pressed and kart.sparkle_cooldown <= 0:
@@ -685,6 +709,32 @@ class Game:
         # The kart always keeps moving; the gas just makes it a bit faster. No brakes.
         throttle = max(0.75, inp.throttle)
         return steer, throttle, 0.0, False
+
+    def magic_turn_around(self, kart):
+        """Poof! A puff of cartoon smoke and the kart is facing the right way again."""
+        t = self.track
+        self.puff(kart.x, kart.y)
+        # Pop back to the middle of the road, pointing forwards, still moving.
+        nx, ny = t.normal(kart.idx)
+        cx, cy = t.point(kart.idx)
+        side = (kart.x - cx) * nx + (kart.y - cy) * ny
+        kart.x, kart.y = cx + nx * clamp(side, -30, 30), cy + ny * clamp(side, -30, 30)
+        kart.heading = t.tangents[kart.idx]
+        speed = max(220.0, abs(kart.forward_speed))
+        kart.vx, kart.vy = math.cos(kart.heading) * speed, math.sin(kart.heading) * speed
+        kart.wrong_way_timer = 0.0
+        kart.say("Poof! This way!", 1.6)
+        self.puff(kart.x, kart.y)
+        self.burst(kart.x, kart.y, kart.character.trail + [(255, 255, 255)], 18, star=True, speed=260)
+        self.rumble(kart, 0.4, 0.6, 250)
+
+    def puff(self, x, y):
+        for _ in range(14):
+            a = random.uniform(0, 2 * math.pi)
+            v = random.uniform(40, 160)
+            self.particles.append(Particle(x + math.cos(a) * 12, y + math.sin(a) * 12, math.cos(a) * v, math.sin(a) * v,
+                                           random.uniform(0.5, 0.9), random.choice([(245, 242, 255), (225, 215, 245), (255, 235, 250)]),
+                                           random.uniform(9, 16), puff=True))
 
     # --- particles ----------------------------------------------------------------
     def burst(self, x, y, colors, count, star=False, speed=220):
@@ -718,6 +768,11 @@ class Game:
         for p in self.particles:
             x, y = p.x - cam_x, p.y - cam_y
             if not (-20 < x < w + 20 and -20 < y < h + 20):
+                continue
+            if p.puff:  # cartoon smoke: grows as it fades
+                size = p.size * (1.0 + 1.4 * (1 - p.life / p.max_life))
+                pygame.draw.circle(surf, INK, (x, y), size + 3)
+                pygame.draw.circle(surf, p.color, (x, y), size)
                 continue
             size = p.size * (0.4 + 0.6 * p.life / p.max_life)
             if p.star:
@@ -797,6 +852,9 @@ class Game:
             if kart.update_lap(prev_idx, self.track.n, self.race_time) and kart.finished_time is None:
                 self.on_lap(kart)
         self.collide_karts()
+        for kart in self.karts:  # bumps from other karts can't push a Little Racer off the road
+            if kart.little:
+                kart.keep_on_track(self.track)
         self.standings_cache = self.standings()
         done = [h.finished_time for h in self.humans if h.finished_time is not None]
         all_done = len(done) == len(self.humans)
@@ -892,6 +950,11 @@ class Game:
         ph = avatar + 16
         px = w - pw - 8 if right_side else 8
         rounded_panel(surf, (px, 8, pw, ph), (30, 20, 50, 170), kart.player.color if multi else INK, 4, 16)
+        if kart.little:  # make the mode obvious at a glance
+            badge = self.text_cache.render(small, "LITTLE RACER", (255, 255, 255))
+            bw = badge.get_width() + 14
+            rounded_panel(surf, (px + 8, 8 + ph + 4, bw, badge.get_height() + 2), (255, 110, 180), INK, 3, 10)
+            surf.blit(badge, (px + 15, 8 + ph + 4))
         surf.blit(pygame.transform.smoothscale(kart.character.avatar_full, (avatar, avatar)), (px + 8, 16))
         tx = px + 16 + avatar
         label = f"{kart.player.label}  {ordinal(place)}" if multi else ordinal(place)
@@ -1037,7 +1100,7 @@ class Game:
                 self.text(S, self.font_med, "READY!", (rect.centerx, rect.bottom - 70), (120, 255, 120), anchor="center")
                 self.text(S, self.font_small, "B to change", (rect.centerx, rect.bottom - 32), anchor="center")
             else:
-                self.text(S, self.font_small, "Left/Right: racer   Up/Down: mode", (rect.centerx, rect.bottom - 82), anchor="center")
+                self.text(S, self.font_small, "Left/Right: racer   Y or D-pad: mode", (rect.centerx, rect.bottom - 82), anchor="center")
                 self.text(S, self.font_small, "A: ready   B: leave", (rect.centerx, rect.bottom - 56), anchor="center")
         if self.players and all(p.ready for p in self.players):
             self.text(S, self.font_med, "Everyone ready! Press A for race settings", (cx, SCREEN_H - 40), (120, 255, 120), anchor="center")
@@ -1123,11 +1186,13 @@ class Game:
         for device, f in frames.items():
             player = next((p for p in self.players if p.device == device), None)
             if player is None:
-                if "confirm" in f.pressed and len(self.players) < MAX_HUMANS:
+                if "join" in f.pressed and len(self.players) < MAX_HUMANS:
                     slot = min(set(range(MAX_HUMANS)) - {p.slot for p in self.players})
                     taken = {p.char_index for p in self.players}
                     default = next(i for i in [0, 1, 2, 7, 3, 9, 4, 10, 5, 11, 6, 8] if i not in taken)
-                    self.players.append(Player(slot, device, default))
+                    new_player = Player(slot, device, default)
+                    new_player.little = default == LITTLE_DEFAULT_CHARACTER
+                    self.players.append(new_player)
                     self.players.sort(key=lambda p: p.slot)
                     self.input.rumble(device, 0.4, 0.4, 150)
                 continue
@@ -1139,12 +1204,13 @@ class Game:
                     return
                 continue
             n = len(self.roster)
-            if "left" in f.pressed:
-                player.char_index = (player.char_index - 1) % n
-            elif "right" in f.pressed:
-                player.char_index = (player.char_index + 1) % n
-            elif "up" in f.pressed or "down" in f.pressed:
+            if "left" in f.pressed or "right" in f.pressed:
+                player.char_index = (player.char_index + (1 if "right" in f.pressed else -1)) % n
+                if player.char_index == LITTLE_DEFAULT_CHARACTER:
+                    player.little = True  # the little sister's racer starts in Little Racer
+            elif "mode" in f.pressed:
                 player.little = not player.little
+                self.input.rumble(device, 0.2, 0.2, 80)
             elif "confirm" in f.pressed:
                 player.ready = True
                 self.input.rumble(device, 0.3, 0.6, 120)
@@ -1157,6 +1223,7 @@ class Game:
         max_ai = MAX_RACERS - len(self.players)
         if not self.settings_touched:
             self.ai_count = max(0, 4 - len(self.players))
+            self.ai_difficulty = 0
             self.laps = 2 if all(p.little for p in self.players) else 3
         self.ai_count = min(self.ai_count, max_ai)
 

@@ -11,9 +11,15 @@ recognise falls back to the raw joystick API with an XInput-style mapping.
 Controllers can be plugged in or removed while the game is running.
 """
 
+import os
 import sys
 
-import pygame
+# Map buttons by POSITION, not by the printed label. Nintendo-style pads (Switch Pro,
+# 8BitDo in Switch mode) print "A" on the right, so label mapping puts the game's
+# "A" (bottom button: join / gas) in the wrong place. Must be set before pygame starts.
+os.environ.setdefault("SDL_GAMECONTROLLER_USE_BUTTON_LABELS", "0")
+
+import pygame  # noqa: E402
 
 try:
     from pygame._sdl2 import controller as sdl_controller
@@ -131,6 +137,10 @@ class Gamepad:
         brake = lt if lt > TRIGGER_DEADZONE else 0.0
         held = {n for n in ("a", "b", "x", "y", "lb", "rb", "back", "start", "up", "down", "left", "right")
                 if self._button(n)}
+        if "up" in held:
+            held.add("dpad_up")      # D-pad only (the stick also adds "up"/"down" below)
+        if "down" in held:
+            held.add("dpad_down")
         # Let the stick drive menus too.
         lx, ly = self._axis("lx"), self._axis("ly")
         if lx < -0.6:
@@ -171,7 +181,7 @@ class InputFrame:
         self.brake = brake
         self.drift = drift
         # Actions that went down this frame:
-        # confirm, back, pause, restart, quit, up, down, left, right, boost
+        # confirm, back, pause, restart, quit, up, down, left, right, boost, join, mode
         self.pressed = set(pressed)
 
 
@@ -243,6 +253,10 @@ class InputManager:
         brake = 1.0 if down("down") else 0.0
         drift = down("drift")
         actions = {name for name in ("left", "right", "up", "down", "confirm", "back", "boost") if down(name)}
+        if "confirm" in actions:
+            actions.add("join")
+        if down("up") or down("down"):
+            actions.add("mode")
         if keys[pygame.K_ESCAPE]:
             actions.add("pause")
         if keys[pygame.K_r]:
@@ -274,6 +288,10 @@ class InputManager:
             actions.add("restart")
         if held & {"a", "b", "x", "y", "lb", "rb"}:
             actions.add("boost")  # any face/shoulder button: Little Racer's sparkle boost
+        if held & {"a", "b", "x", "y", "start"}:
+            actions.add("join")   # any face button joins, whatever the pad's layout
+        if held & {"y", "dpad_up", "dpad_down"}:
+            actions.add("mode")   # switch Little / Big Racer (not the stick: too easy to wiggle)
         return steer, throttle, brake, drift, actions
 
     def poll(self):

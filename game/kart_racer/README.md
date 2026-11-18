@@ -68,11 +68,13 @@ On Windows or another desktop, `pip install pygame-ce` (or `pygame`) and
 
 ## Getting a race going
 
-1. **Join.** Each player presses **A** on their own controller. Two people
+1. **Join.** Each player presses any face button on their own controller. Two people
    can also share the keyboard: one presses **Enter** to play with the arrow
    keys, and the other presses **Space** to play with WASD.
-2. **Pick.** Use **Left/Right** to choose a racer and **Up/Down** to choose
-   that player's mode (Little Racer or Big Racer), then press **A** when ready.
+2. **Pick.** Use **Left/Right** to choose a racer, and the **Y** button or
+   **D-pad up/down** to switch that player's mode (Little Racer or Big
+   Racer). The stick doesn't change the mode, so it can't flip by accident.
+   Little Sis's racer starts in Little Racer. Press **A** when ready.
    Players in the same race can use different modes, so a toddler and an older
    kid can race together.
 3. **Race settings.** When everyone is ready, press A again and choose:
@@ -102,10 +104,12 @@ plugged in.
   stick clearly moves the kart.
 - **Bouncy walls.** The kart bounces off the edge of the road with a sparkle
   and keeps going. It can't leave the track or hit trees.
-- **Turns itself around.** If the kart is going the wrong way for about 2
-  seconds, it turns back to face the right way.
+- **Turns itself around.** If the kart is going the wrong way for 1.5
+  seconds, there's a magic puff of smoke and it's facing the right way
+  again, still moving.
 - **Any button gives a sparkle boost:** a burst of stars, a speed-up and a
   little rumble.
+- A pink **LITTLE RACER** badge under the player's panel shows the mode.
 - Every race ends with "Hooray! Everyone did great!" and confetti.
 
 ### Big Racer (for about ages 6+)
@@ -155,7 +159,10 @@ sparks change from blue to orange, release for a burst of speed.
 The game uses SDL's GameController database (built into pygame), so Xbox
 360/One/Series, PlayStation 4/5, Switch Pro, 8BitDo and most other wired or
 Bluetooth pads work with the right button layout and no setup. Pads rumble
-on bumps, boosts and the countdown. If SDL doesn't recognise a pad, it falls
+on bumps, boosts and the countdown. Buttons are mapped by **position**, not by the printed letter: the bottom
+face button is always "A" (join, ready, gas). This matters on Nintendo-layout
+pads like the Switch Pro or an 8BitDo in Switch mode, where the letters are
+swapped. If SDL doesn't recognise a pad, it falls
 back to a generic layout, which you can adjust in `RAW_BUTTONS` / `RAW_AXES`
 in `input_manager.py`.
 
