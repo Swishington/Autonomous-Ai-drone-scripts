@@ -1,8 +1,9 @@
 # Kart Rush
 
 A top-down arcade kart racer for PC, made to be played with a console-style
-controller. Race three AI rivals over 3 laps, use boost pads, and chain
-drifts for speed boosts. The keyboard works too.
+controller. Pick one of 10 racers, then race three rivals through a candy
+countryside with lollipops, gumdrops and mushrooms. There are two modes: one
+for little kids and one for big kids.
 
 ## Run it
 
@@ -14,43 +15,77 @@ pip install -r requirements.txt
 python kart_racer.py
 ```
 
-Plug in a controller before or while the game is running. The bottom-left
-corner shows which input device is active. Press **F11** for fullscreen.
+Plug in a controller before or while the game is running. Press **F11** for
+fullscreen.
+
+## Modes
+
+### Little Racer (for about ages 3–5)
+- **The kart drives itself.** It never stops, and there's no brake to get
+  stuck on.
+- **Her steering counts.** The game gently steers too, but pushing the stick
+  clearly moves the kart, so she can weave and chase the other racers.
+- **Bouncy walls.** The kart bounces off the edge of the road with a sparkle
+  and keeps going. It can't leave the track or crash into trees.
+- **Turns itself around.** If she ends up going the wrong way for about 2
+  seconds, the kart turns back to face the right way.
+- **Any button gives a sparkle boost:** a burst of stars, a speed-up and a
+  little rumble.
+- Races are 2 laps, the rivals are gentle, and every finish gets
+  "Hooray! You did it!" with confetti.
+
+### Big Racer (for about ages 6+)
+Full control over 3 laps: gas, brake, reverse, and drift boosts. Driving on
+the grass slows you down, trees are solid, and the rivals race properly. Your
+best lap is saved.
+
+## Racers
+
+| Magical & sweet       | Action                       |
+|-----------------------|------------------------------|
+| Sparkle the unicorn   | Blaze, the fire creature     |
+| Coral the mermaid     | Droplet, the water creature  |
+| Sprinkles the donut   | Ember Ninja (brick-built)    |
+| Swirly the lollipop   | Jade Ninja (brick-built)     |
+| Cupcake               | Flame Rod, a die-cast hot rod |
+
+Every racer has a matching kart and boost trail. Sparkle's trail is a
+rainbow.
 
 ## Controls
 
 | Action                 | Controller (Xbox / PlayStation)  | Keyboard        |
 |------------------------|----------------------------------|-----------------|
+| Menus                  | Left stick / D-pad, A to pick, B back | Arrows, Enter, Backspace |
 | Steer                  | Left stick or D-pad              | Arrows / A D    |
 | Accelerate             | RT / R2 (or A / Cross)           | Up / W          |
 | Brake / reverse        | LT / L2 (or B / Circle)          | Down / S        |
 | Drift (hold in a turn) | RB / LB / X  (R1 / L1 / Square)  | Space / Shift   |
+| Sparkle boost (Little) | Any of A B X Y LB RB             | Space / Enter   |
 | Pause                  | Start / Options                  | Esc             |
 | Restart (when paused)  | Y / Triangle                     | R               |
-| Back to title          | B / Circle                       | Backspace       |
 
-Triggers are analog, so you can feather the throttle. The controller rumbles
-on bumps, crashes, boosts and the start countdown.
-
-**Drift boost:** hold drift through a corner at speed. When the sparks change
-from blue to orange, release to get a burst of speed. Longer drifts give
-longer boosts.
+**Drift boost (Big Racer):** hold drift through a corner at speed. When the
+sparks change from blue to orange, release for a burst of speed.
 
 ## Supported controllers
 
 The game uses SDL's GameController database (built into pygame), so Xbox
 360/One/Series, PlayStation 4/5, Switch Pro, 8BitDo and most other wired or
-Bluetooth pads work with the right button layout and no setup. If SDL doesn't
-recognise a pad, it falls back to a generic XInput-style layout. You can
-adjust that layout in `RAW_BUTTONS` / `RAW_AXES` at the top of
-`input_manager.py`.
+Bluetooth pads work with the right button layout and no setup. Pads rumble
+on bumps, boosts and the countdown. If SDL doesn't recognise a pad, it falls
+back to a generic layout, which you can adjust in `RAW_BUTTONS` / `RAW_AXES`
+in `input_manager.py`.
 
-On Steam Deck or with Steam Input running, launch normally. Steam presents
-the pad as an Xbox controller.
+## Tuning Little Racer
+
+The constants at the top of `kart_racer.py` control the toddler mode:
+`LITTLE_ASSIST` (how much the game steers), `LITTLE_INPUT` (how much her
+stick counts), `WRONG_WAY_SECONDS`, `WALL_BOUNCE` and `LITTLE_PLAYER_SKILL`
+(her top speed).
 
 ## Files
 
-- `kart_racer.py`: the game (track, kart physics, AI, race logic, HUD).
+- `kart_racer.py`: the game (track, physics, AI, both modes, menus, HUD).
+- `characters.py`: the 10 racers, all drawn in code.
 - `input_manager.py`: controller and keyboard input with hot-plug and rumble.
-
-Your best lap is saved to `~/.kart_rush_best.json`.

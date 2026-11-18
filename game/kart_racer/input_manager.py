@@ -105,7 +105,18 @@ class Gamepad:
         lt = self._axis("lt")
         throttle = rt if rt > TRIGGER_DEADZONE else 0.0
         brake = lt if lt > TRIGGER_DEADZONE else 0.0
-        held = {n for n in ("a", "b", "x", "y", "lb", "rb", "back", "start", "up", "down") if self._button(n)}
+        held = {n for n in ("a", "b", "x", "y", "lb", "rb", "back", "start", "up", "down", "left", "right")
+                if self._button(n)}
+        # Let the stick drive menus too.
+        lx, ly = self._axis("lx"), self._axis("ly")
+        if lx < -0.6:
+            held.add("left")
+        elif lx > 0.6:
+            held.add("right")
+        if ly < -0.6:
+            held.add("up")
+        elif ly > 0.6:
+            held.add("down")
         return steer, throttle, brake, held
 
     def rumble(self, low, high, duration_ms):
@@ -135,7 +146,8 @@ class InputFrame:
         self.throttle = throttle
         self.brake = brake
         self.drift = drift
-        # Menu actions that went down this frame: confirm, back, pause, restart, up, down
+        # Actions that went down this frame:
+        # confirm, back, pause, restart, up, down, left, right, boost
         self.pressed = set(pressed)
 
 
@@ -197,6 +209,12 @@ class InputManager:
             actions.add("up")
         if keys[pygame.K_DOWN] or keys[pygame.K_s]:
             actions.add("down")
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+            actions.add("left")
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+            actions.add("right")
+        if drift or keys[pygame.K_RETURN]:
+            actions.add("boost")
 
         if self.pad is not None:
             try:
@@ -217,10 +235,11 @@ class InputManager:
                 actions.add("pause")
             if "y" in held:
                 actions.add("restart")
-            if "up" in held:
-                actions.add("up")
-            if "down" in held:
-                actions.add("down")
+            for direction in ("up", "down", "left", "right"):
+                if direction in held:
+                    actions.add(direction)
+            if held & {"a", "b", "x", "y", "lb", "rb"}:
+                actions.add("boost")  # any face/shoulder button: used for Little Racer's sparkle boost
 
         pressed = actions - self._prev_actions
         self._prev_actions = actions
