@@ -19,12 +19,19 @@ Press **F11** for fullscreen.
 
 ## Install on Bazzite and add to Steam
 
-You'll use this once, in **Desktop Mode**. Open **Konsole** and run:
+You'll use this once, in **Desktop Mode**. Open **Konsole** and paste these
+three commands **one at a time**, pressing Enter after each. Each command is a
+single line. The first two download only the game folder (about 7 MB), not the
+whole drone project:
 
 ```sh
-git clone --depth 1 -b claude/pc-game-controller-support-qjf2bx \
-    https://github.com/Swishington/Autonomous-Ai-drone-scripts.git ~/kart-rush-src
-~/kart-rush-src/game/kart_racer/bazzite/install.sh --names "Sister" "Brother"
+git clone --depth 1 --filter=blob:none --sparse -b claude/pc-game-controller-support-qjf2bx https://github.com/Swishington/Autonomous-Ai-drone-scripts.git ~/kart-rush-src
+```
+```sh
+git -C ~/kart-rush-src sparse-checkout set game/kart_racer
+```
+```sh
+bash ~/kart-rush-src/game/kart_racer/bazzite/install.sh --names "Sister" "Brother"
 ```
 
 Put your kids' names in the `--names` part. They're saved only on that PC,
@@ -53,7 +60,7 @@ shortcut gives the same library entry, controller support and artwork
 privately, without the fee or Valve's review.
 
 To update after a new version is pushed:
-`cd ~/kart-rush-src && git pull && ./game/kart_racer/bazzite/install.sh`.
+`git -C ~/kart-rush-src pull` and then `bash ~/kart-rush-src/game/kart_racer/bazzite/install.sh`.
 Your names are kept.
 
 On Windows or another desktop, `pip install pygame-ce` (or `pygame`) and
