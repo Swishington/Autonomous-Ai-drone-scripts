@@ -12,6 +12,7 @@ import random
 
 import pygame
 
+from cartoon import INK, Canvas, TextCache, blur, draw, finish, load_font, rounded_panel, soft_shadow
 from characters import load_roster
 from input_manager import EMPTY_FRAME, InputManager
 
@@ -153,62 +154,114 @@ class Track:
 
     def _render(self, rng):
         surf = pygame.Surface((WORLD_W, WORLD_H))
-        surf.fill((90, 175, 75))
-        for _ in range(5000):
-            shade = rng.choice([(80, 162, 68), (100, 186, 84), (86, 168, 72)])
-            pygame.draw.circle(surf, shade, (rng.randrange(WORLD_W), rng.randrange(WORLD_H)), rng.randint(2, 6))
-        for _ in range(700):  # little flowers
-            x, y = rng.randrange(WORLD_W), rng.randrange(WORLD_H)
-            c = rng.choice([(255, 255, 255), (255, 170, 210), (255, 230, 90), (190, 160, 255)])
-            for k in range(5):
-                a = k * 2 * math.pi / 5
-                pygame.draw.circle(surf, c, (x + math.cos(a) * 3, y + math.sin(a) * 3), 2)
-            pygame.draw.circle(surf, (255, 200, 40), (x, y), 2)
-        half = TRACK_WIDTH // 2
-        for i, (x, y) in enumerate(self.center):
-            color = (255, 90, 150) if (i // 4) % 2 == 0 else (250, 250, 250)
-            pygame.draw.circle(surf, color, (int(x), int(y)), half + CURB_WIDTH)
-        for x, y in self.center:
-            pygame.draw.circle(surf, (95, 95, 108), (int(x), int(y)), half)
-        for i in range(0, self.n, 6):  # dashed centre line
-            if (i // 6) % 2 == 0:
-                a, b = self.center[i], self.center[(i + 3) % self.n]
-                pygame.draw.line(surf, (215, 215, 215), a, b, 3)
-        self._draw_start_line(surf)
-        for idx in self.boost_pads:
-            self._draw_boost_pad(surf, idx)
+        self._draw_grass(surf, rng)
+        self._draw_road_shadow(surf)
+        self._draw_road(surf)
         for ob in self.obstacles:
             self._draw_obstacle(surf, *ob)
         return surf
 
     @staticmethod
-    def _draw_obstacle(surf, x, y, r, kind):
-        x, y = int(x), int(y)
-        pygame.draw.circle(surf, (50, 110, 45), (x + 6, y + 6), r)  # shadow
-        if kind == "tree":
-            pygame.draw.circle(surf, (30, 120, 45), (x, y), r)
-            pygame.draw.circle(surf, (60, 155, 65), (x - r // 4, y - r // 4), r // 2)
-        elif kind == "lollipop":
-            colors = [(255, 90, 140), (255, 255, 255), (120, 200, 255), (255, 255, 255)]
-            for i in range(8):
-                a0 = i * math.pi / 4
-                pts = [(x, y)] + [(x + math.cos(a0 + t * math.pi / 16) * r, y + math.sin(a0 + t * math.pi / 16) * r)
-                                  for t in range(5)]
-                pygame.draw.polygon(surf, colors[i % 4], pts)
-            pygame.draw.circle(surf, (230, 70, 120), (x, y), r, 3)
-        elif kind == "gumdrop":
-            c = random.Random(x * 31 + y).choice([(255, 80, 120), (120, 220, 120), (255, 200, 60), (160, 120, 255)])
-            pygame.draw.circle(surf, c, (x, y), r)
-            pygame.draw.circle(surf, tuple(min(255, v + 60) for v in c), (x - r // 3, y - r // 3), r // 3)
-            rng = random.Random(x + y * 7)
-            for _ in range(8):
-                pygame.draw.circle(surf, (255, 255, 255), (x + rng.randint(-r // 2, r // 2), y + rng.randint(-r // 2, r // 2)), 2)
-        else:  # mushroom
-            pygame.draw.circle(surf, (225, 40, 50), (x, y), r)
-            for dx, dy, sr in ((-r // 3, -r // 3, r // 4), (r // 3, -r // 5, r // 5), (0, r // 3, r // 4), (-r // 2, r // 4, r // 6)):
-                pygame.draw.circle(surf, (255, 255, 255), (x + dx, y + dy), sr)
+    def _draw_grass(surf, rng):
+        """Soft, bright lawn: big blurry colour patches, little tufts and flowers."""
+        surf.fill((118, 196, 84))
+        q = 4
+        patches = pygame.Surface((WORLD_W // q, WORLD_H // q))
+        patches.fill((118, 196, 84))  # opaque base so blurred edges don't go dark
+        for _ in range(260):
+            c = rng.choice([(130, 206, 92), (108, 186, 76), (124, 202, 88)])
+            pygame.draw.circle(patches, c, (rng.randrange(WORLD_W // q), rng.randrange(WORLD_H // q)), rng.randint(10, 34))
+        surf.blit(pygame.transform.smoothscale(blur(patches, 4), (WORLD_W, WORLD_H)), (0, 0))
+        for _ in range(1400):  # grass tufts
+            x, y = rng.randrange(WORLD_W), rng.randrange(WORLD_H)
+            col = (88, 160, 64)
+            for dx in (-4, 0, 4):
+                pygame.draw.line(surf, col, (x + dx * 0.4, y + 3), (x + dx, y - 4 - (dx == 0) * 2), 2)
+        for _ in range(420):  # flowers
+            x, y = rng.randrange(WORLD_W), rng.randrange(WORLD_H)
+            c = rng.choice([(255, 255, 255), (255, 175, 215), (255, 232, 100), (200, 170, 255)])
+            for k in range(5):
+                a = k * 2 * math.pi / 5
+                pygame.draw.circle(surf, c, (x + math.cos(a) * 4, y + math.sin(a) * 4), 3)
+            pygame.draw.circle(surf, (255, 190, 40), (x, y), 2)
 
-    def _draw_start_line(self, surf):
+    def _draw_road_shadow(self, surf):
+        q = 4
+        layer = pygame.Surface((WORLD_W // q, WORLD_H // q), pygame.SRCALPHA)
+        r = (TRACK_WIDTH / 2 + CURB_WIDTH + 14) / q
+        for x, y in self.center[::2]:
+            pygame.draw.circle(layer, (30, 70, 30, 110), (x / q + 1.5, y / q + 2.5), r)
+        surf.blit(pygame.transform.smoothscale(blur(layer, 3), (WORLD_W, WORLD_H)), (0, 0))
+
+    def _draw_road(self, surf):
+        """Road, curbs, centre line, start line and boost pads, supersampled in tiles."""
+        tile, k = 800, 2
+        half = TRACK_WIDTH / 2
+        reach = half + CURB_WIDTH + 12
+        for ty in range(0, WORLD_H, tile):
+            for tx in range(0, WORLD_W, tile):
+                pts = [(i, x, y) for i, (x, y) in enumerate(self.center)
+                       if tx - reach < x < tx + tile + reach and ty - reach < y < ty + tile + reach]
+                if not pts:
+                    continue
+                layer = pygame.Surface((tile * k, tile * k), pygame.SRCALPHA)
+                T = lambda x, y: ((x - tx) * k, (y - ty) * k)  # noqa: E731
+                for i, x, y in pts:
+                    pygame.draw.circle(layer, INK, T(x, y), (half + CURB_WIDTH + 4) * k)
+                for i, x, y in pts:
+                    color = (255, 96, 156) if (i // 4) % 2 == 0 else (252, 248, 252)
+                    pygame.draw.circle(layer, color, T(x, y), (half + CURB_WIDTH) * k)
+                for i, x, y in pts:
+                    pygame.draw.circle(layer, (64, 60, 82), T(x, y), (half + 3) * k)
+                for i, x, y in pts:
+                    pygame.draw.circle(layer, (92, 94, 114), T(x, y), half * k)
+                for i, x, y in pts:
+                    pygame.draw.circle(layer, (100, 103, 124), T(x, y), (half - 26) * k)
+                for i, x, y in pts:  # rounded dashes down the middle
+                    if i % 12 < 5:
+                        pygame.draw.circle(layer, (236, 236, 244), T(x, y), 3.5 * k)
+                self._draw_start_line(layer, T, k)
+                for idx in self.boost_pads:
+                    self._draw_boost_pad(layer, idx, T, k)
+                surf.blit(pygame.transform.smoothscale(layer, (tile, tile)), (tx, ty))
+
+    @staticmethod
+    def _draw_obstacle(surf, x, y, r, kind):
+        """Props are outlined, shaded 'stickers' with a soft drop shadow."""
+        size = r * 2 + 4
+        c = Canvas(size, size)
+        m = size / 2
+        if kind == "tree":
+            for i in range(9):  # bumpy cloud-like canopy
+                a = i * 2 * math.pi / 9
+                draw.circle(c, (52, 150, 66), (m + math.cos(a) * r * 0.62, m + math.sin(a) * r * 0.62), r * 0.42)
+            draw.circle(c, (52, 150, 66), (m, m), r * 0.7)
+            draw.circle(c, (86, 186, 84), (m - r * 0.25, m - r * 0.25), r * 0.38)
+            draw.circle(c, (120, 210, 104), (m - r * 0.35, m - r * 0.38), r * 0.16)
+        elif kind == "lollipop":
+            colors = [(255, 90, 150), (255, 255, 255), (110, 200, 255), (255, 255, 255)]
+            for i in range(8):
+                a0 = i * math.pi / 4 + 0.3
+                draw.polygon(c, colors[i % 4], [(m, m)] + [(m + math.cos(a0 + t * math.pi / 16) * r, m + math.sin(a0 + t * math.pi / 16) * r)
+                                                           for t in range(5)])
+            draw.circle(c, (255, 255, 255), (m, m), r * 0.18)
+        elif kind == "gumdrop":
+            col = random.Random(int(x) * 31 + int(y)).choice([(255, 90, 130), (120, 220, 120), (255, 200, 70), (170, 130, 255)])
+            draw.circle(c, col, (m, m), r)
+            draw.circle(c, tuple(min(255, v + 70) for v in col), (m - r * 0.35, m - r * 0.35), r * 0.3)
+            rng = random.Random(int(x) + int(y) * 7)
+            for _ in range(9):
+                draw.circle(c, (255, 255, 255), (m + rng.uniform(-0.6, 0.6) * r, m + rng.uniform(-0.6, 0.6) * r), 1.6)
+        else:  # mushroom
+            draw.circle(c, (232, 52, 62), (m, m), r)
+            for dx, dy, sr in ((-0.35, -0.35, 0.26), (0.35, -0.2, 0.2), (0.05, 0.38, 0.24), (-0.5, 0.25, 0.15), (0.5, 0.35, 0.13)):
+                draw.circle(c, (255, 250, 245), (m + dx * r, m + dy * r), sr * r)
+        sprite = finish(c, (size, size), line=3)
+        shadow = soft_shadow(int(r * 2.1), int(r * 1.7), 110)
+        surf.blit(shadow, shadow.get_rect(center=(x + 7, y + 10)))
+        surf.blit(sprite, sprite.get_rect(center=(x, y)))
+
+    def _draw_start_line(self, layer, T, k):
         x, y = self.center[0]
         nx, ny = self.normal(0)
         a = self.tangents[0]
@@ -218,30 +271,38 @@ class Track:
             for c in range(cells):
                 off = -TRACK_WIDTH / 2 + (c + 0.5) * size
                 cx, cy = x + nx * off + tx * (row - 0.5) * size, y + ny * off + ty * (row - 0.5) * size
-                color = (20, 20, 20) if (c + row) % 2 else (250, 250, 250)
-                rect = pygame.Rect(0, 0, size + 1, size + 1)
-                rect.center = (cx, cy)
-                pygame.draw.rect(surf, color, rect)
+                h = size / 2 + 0.5
+                corners = [(cx + tx * dx * h + nx * dy * h, cy + ty * dx * h + ny * dy * h)
+                           for dx, dy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+                color = (40, 30, 50) if (c + row) % 2 else (250, 250, 250)
+                pygame.draw.polygon(layer, color, [T(*p) for p in corners])
 
-    def _draw_boost_pad(self, surf, idx):
+    def _draw_boost_pad(self, layer, idx, T, k):
         x, y = self.center[idx]
         a = self.tangents[idx]
         tx, ty = math.cos(a), math.sin(a)
         nx, ny = self.normal(idx)
-        for k in range(3):
-            base = (x + tx * (k * 22 - 22), y + ty * (k * 22 - 22))
-            tip = (base[0] + tx * 20, base[1] + ty * 20)
-            left = (base[0] + nx * 30, base[1] + ny * 30)
-            right = (base[0] - nx * 30, base[1] - ny * 30)
-            pygame.draw.polygon(surf, (255, 210, 0), [left, tip, right])
-            pygame.draw.polygon(surf, (255, 140, 0), [left, tip, right], 3)
+        for j in range(3):
+            base = (x + tx * (j * 24 - 24), y + ty * (j * 24 - 24))
+            tip = (base[0] + tx * 22, base[1] + ty * 22)
+            left = (base[0] + nx * 32, base[1] + ny * 32)
+            right = (base[0] - nx * 32, base[1] - ny * 32)
+            notch = (base[0] + tx * 8, base[1] + ty * 8)
+            poly = [T(*left), T(*tip), T(*right), T(*notch)]
+            pygame.draw.polygon(layer, (255, 214, 40), poly)
+            pygame.draw.polygon(layer, INK, poly, 3 * k)
 
     def _render_minimap(self, width):
         scale = width / WORLD_W
         mm = pygame.Surface((int(WORLD_W * scale), int(WORLD_H * scale)), pygame.SRCALPHA)
-        mm.fill((0, 0, 0, 120))
+        pygame.draw.rect(mm, (30, 20, 50, 160), mm.get_rect(), border_radius=14)
+        pygame.draw.rect(mm, INK, mm.get_rect(), 3, border_radius=14)
         pts = [(x * scale, y * scale) for x, y in self.center]
-        pygame.draw.lines(mm, (230, 230, 230), True, pts, max(4, int(width / 45)))
+        lw = max(4, int(width / 45))
+        for p in pts:
+            pygame.draw.circle(mm, INK, p, lw / 2 + 2)
+        for p in pts:
+            pygame.draw.circle(mm, (250, 245, 255), p, lw / 2)
         return mm, scale
 
 
@@ -265,6 +326,8 @@ class Player:
 
 
 class Kart:
+    shadow = None  # shared soft drop shadow, made on first draw
+
     def __init__(self, character, x, y, heading, player=None, skill=1.0, lane=0.0):
         self.character = character
         self.name = character.name
@@ -298,12 +361,12 @@ class Kart:
         self.img = character.kart
         self.tag = None
         if player is not None:
-            font = pygame.font.Font(None, 24)
+            font = load_font(26)
             text = font.render(player.label, True, (255, 255, 255))
-            self.tag = pygame.Surface((text.get_width() + 10, text.get_height() + 4), pygame.SRCALPHA)
-            pygame.draw.rect(self.tag, player.color, self.tag.get_rect(), border_radius=6)
-            pygame.draw.rect(self.tag, (0, 0, 0), self.tag.get_rect(), 2, border_radius=6)
-            self.tag.blit(text, (5, 3))
+            self.tag = pygame.Surface((text.get_width() + 14, text.get_height() + 6), pygame.SRCALPHA)
+            pygame.draw.rect(self.tag, player.color, self.tag.get_rect(), border_radius=9)
+            pygame.draw.rect(self.tag, INK, self.tag.get_rect(), 3, border_radius=9)
+            self.tag.blit(text, (7, 3))
 
     @property
     def is_human(self):
@@ -417,9 +480,9 @@ class Kart:
         cx, cy = self.x - cam_x, self.y - cam_y
         if not (-80 < cx < surf.get_width() + 80 and -80 < cy < surf.get_height() + 80):
             return
-        shadow = pygame.Surface((52, 52), pygame.SRCALPHA)
-        pygame.draw.circle(shadow, (0, 0, 0, 70), (26, 26), 25)
-        surf.blit(shadow, (cx - 22, cy - 20))
+        if Kart.shadow is None:
+            Kart.shadow = soft_shadow(58, 44, 120)
+        surf.blit(Kart.shadow, Kart.shadow.get_rect(center=(cx + 5, cy + 8)))
         if self.boost_timer > 0:
             bx, by = cx - math.cos(self.heading) * 32, cy - math.sin(self.heading) * 32
             pygame.draw.circle(surf, ch.trail[0], (bx, by), random.randint(7, 11))
@@ -475,11 +538,15 @@ class Game:
         pygame.mouse.set_visible(headless or not fullscreen)
         pygame.display.set_caption("Kart Rush")
         self.clock = pygame.time.Clock()
-        self.font_huge = pygame.font.Font(None, 130)
-        self.font_big = pygame.font.Font(None, 100)
-        self.font_med = pygame.font.Font(None, 48)
-        self.font = pygame.font.Font(None, 32)
-        self.font_small = pygame.font.Font(None, 24)
+        self.font_huge = load_font(130)
+        self.font_big = load_font(100)
+        self.font_med = load_font(48)
+        self.font = load_font(32)
+        self.font_small = load_font(25)
+        self.text_cache = TextCache()
+        self.screen.fill((40, 20, 60))  # building the cartoon sprites takes a moment
+        self.text(self.screen, self.font_big, "Loading...", (SCREEN_W / 2, SCREEN_H / 2), (255, 210, 60), anchor="center")
+        pygame.display.flip()
         self.input = InputManager()
         self.track = Track()
         self.roster = load_roster()
@@ -765,12 +832,9 @@ class Game:
         return finished + rest
 
     # --- drawing helpers --------------------------------------------------------------
-    @staticmethod
-    def text(surf, font, s, pos, color=(255, 255, 255), anchor="topleft", shadow=True):
-        if shadow:
-            img = font.render(s, True, (0, 0, 0))
-            surf.blit(img, img.get_rect(**{anchor: (pos[0] + 2, pos[1] + 2)}))
-        img = font.render(s, True, color)
+    def text(self, surf, font, s, pos, color=(255, 255, 255), anchor="topleft", shadow=True):
+        """Chunky outlined cartoon text (cached)."""
+        img = self.text_cache.render(font, s, color) if shadow else font.render(s, True, color)
         r = img.get_rect(**{anchor: pos})
         surf.blit(img, r)
         return r
@@ -820,29 +884,33 @@ class Game:
 
         # Top-left panel
         avatar = 56 if compact else 90
-        panel = pygame.Surface((avatar + (150 if compact else 250), avatar + 16), pygame.SRCALPHA)
-        panel.fill((0, 0, 0, 120))
-        if multi:
-            pygame.draw.rect(panel, kart.player.color, panel.get_rect(), 4)
-        px = w - panel.get_width() - 8 if right_side else 8
-        surf.blit(panel, (px, 8))
+        stats = f"Time {fmt_time(self.race_time)}   Best {fmt_time(self.best_lap)}"
+        show_stats = not kart.little and not compact
+        pw = avatar + (150 if compact else 210)
+        if show_stats:
+            pw = max(pw, avatar + 40 + small.size(stats)[0])
+        ph = avatar + 16
+        px = w - pw - 8 if right_side else 8
+        rounded_panel(surf, (px, 8, pw, ph), (30, 20, 50, 170), kart.player.color if multi else INK, 4, 16)
         surf.blit(pygame.transform.smoothscale(kart.character.avatar_full, (avatar, avatar)), (px + 8, 16))
         tx = px + 16 + avatar
         label = f"{kart.player.label}  {ordinal(place)}" if multi else ordinal(place)
         self.text(surf, med, label, (tx, 14), (255, 220, 60))
         self.text(surf, norm, f"Lap {lap}/{self.laps}", (tx, 14 + med.get_height()))
-        if not kart.little and not compact:
-            self.text(surf, small, f"Time {fmt_time(self.race_time)}   Best {fmt_time(self.best_lap)}", (tx, 14 + med.get_height() + 28))
+        if show_stats:
+            self.text(surf, small, stats, (tx, 14 + med.get_height() + 28))
 
         speed = abs(kart.forward_speed)
         if not kart.little:
             bw = 160 if compact else 240
             bar_x = w - bw - 20 if (right_side or not multi) else 20
             bar = pygame.Rect(bar_x, h - 34, bw, 16 if compact else 20)
-            pygame.draw.rect(surf, (0, 0, 0), bar.inflate(6, 6), border_radius=6)
+            pygame.draw.rect(surf, INK, bar.inflate(8, 8), border_radius=10)
+            pygame.draw.rect(surf, (70, 60, 95), bar, border_radius=6)
             fill = bar.copy()
             fill.width = int(bar.width * min(1.0, speed / (MAX_SPEED * BOOST_SPEED_FACTOR)))
-            pygame.draw.rect(surf, (255, 170, 40) if kart.boost_timer > 0 else (80, 200, 255), fill, border_radius=4)
+            if fill.width > 0:
+                pygame.draw.rect(surf, (255, 170, 40) if kart.boost_timer > 0 else (80, 200, 255), fill, border_radius=6)
             self.text(surf, small, f"{int(speed / 5)} km/h", (bar.left, bar.top - 4), anchor="bottomleft")
             if kart.drifting:
                 ready = kart.drift_charge >= 0.7
@@ -939,19 +1007,15 @@ class Game:
         for slot in range(MAX_HUMANS):
             rect = pygame.Rect(left + slot * (pw + gap), 145, pw, ph)
             player = next((p for p in self.players if p.slot == slot), None)
-            box = pygame.Surface(rect.size, pygame.SRCALPHA)
             if player is None:
-                box.fill((255, 255, 255, 30))
-                S.blit(box, rect)
-                pygame.draw.rect(S, (200, 200, 200), rect, 2, border_radius=12)
+                rounded_panel(S, rect, (255, 255, 255, 40), (220, 220, 230), 3, 22)
                 self.text(S, self.font_med, f"P{slot + 1}", (rect.centerx, rect.top + 50), PLAYER_COLORS[slot], anchor="center")
                 if (pygame.time.get_ticks() // 600) % 2 == 0 or slot != len(self.players):
                     self.text(S, self.font, "Press A to join", (rect.centerx, rect.centery), anchor="center")
                 continue
             ch = self.roster[player.char_index]
-            box.fill((*ch.body, 200))
-            S.blit(box, rect)
-            pygame.draw.rect(S, player.color, rect, 6, border_radius=12)
+            rounded_panel(S, rect.inflate(8, 8), (0, 0, 0, 0), INK, 4, 26)
+            rounded_panel(S, rect, (*ch.body, 215), player.color, 7, 22)
             self.text(S, self.font_med, player.label, (rect.left + 16, rect.top + 12), player.color)
             self.text(S, self.font_small, self.input.device_name(player.device)[:30], (rect.left + 16, rect.top + 52),
                       (240, 240, 240))
@@ -965,8 +1029,7 @@ class Game:
                     pygame.draw.polygon(S, (255, 255, 255), [(ax, rect.top + 145), (ax, rect.top + 175), (ax + sx * 16, rect.top + 160)])
             mode_rect = pygame.Rect(0, 0, pw - 40, 64)
             mode_rect.center = (rect.centerx, rect.top + 345)
-            pygame.draw.rect(S, (255, 120, 190) if player.little else (80, 140, 240), mode_rect, border_radius=10)
-            pygame.draw.rect(S, (255, 255, 255), mode_rect, 2, border_radius=10)
+            rounded_panel(S, mode_rect, (255, 120, 190) if player.little else (80, 140, 240), INK, 4, 16)
             self.text(S, self.font, "Little Racer" if player.little else "Big Racer", (mode_rect.centerx, mode_rect.top + 20), anchor="center")
             self.text(S, self.font_small, "easy - kart helps steer" if player.little else "full control + drifting",
                       (mode_rect.centerx, mode_rect.top + 46), (240, 240, 240), anchor="center")
@@ -1000,10 +1063,8 @@ class Game:
             rect = pygame.Rect(0, 0, 760, 90)
             rect.center = (cx, 210 + i * 110)
             selected = i == self.settings_row
-            box = pygame.Surface(rect.size, pygame.SRCALPHA)
-            box.fill((110, 180, 255, 210) if selected else (255, 255, 255, 40))
-            S.blit(box, rect)
-            pygame.draw.rect(S, (255, 255, 255) if selected else (120, 120, 120), rect, 4 if selected else 2, border_radius=10)
+            rounded_panel(S, rect, (110, 180, 255, 225) if selected else (255, 255, 255, 45),
+                          (255, 255, 255) if selected else INK, 5 if selected else 3, 20)
             self.text(S, self.font_med, label, (rect.left + 30, rect.centery), anchor="midleft")
             self.text(S, self.font_med, f"<  {value}  >" if selected else value, (rect.right - 130, rect.centery), (255, 255, 120), anchor="center")
             if selected:
@@ -1034,7 +1095,7 @@ class Game:
         self.text(S, self.font, "Select / View  or  X  -  quit game", (cx, cy + 120), (255, 180, 180), anchor="center")
 
     def draw_results(self):
-        self.overlay(self.screen, 215)
+        self.overlay(self.screen, 228)
         S = self.screen
         cx = SCREEN_W / 2
         winner = self.standings_cache[0]

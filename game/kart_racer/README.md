@@ -165,6 +165,8 @@ stick counts), `WRONG_WAY_SECONDS`, `WALL_BOUNCE` and `LITTLE_PLAYER_SKILL`
 
 - `kart_racer.py`: the game (track, physics, AI, lobby, settings, split-screen, HUD).
 - `characters.py`: the 10 racers, all drawn in code.
+- `cartoon.py`: the cartoon look: supersampled shapes, sticker outlines, shading, soft shadows and outlined text.
+- `assets/fonts/`: the Lilita One font (SIL Open Font License, see `OFL-LilitaOne.txt`).
 - `make_art.py`: draws the Steam library artwork and icon.
 - `bazzite/install.sh`: the Bazzite / Linux installer.
 - `input_manager.py`: input from multiple controllers and a split keyboard, with hot-plug and rumble.

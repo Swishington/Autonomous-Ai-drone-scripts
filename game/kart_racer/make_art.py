@@ -19,6 +19,7 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 import pygame  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cartoon import load_font  # noqa: E402
 from characters import load_roster  # noqa: E402
 from kart_racer import Track  # noqa: E402
 
@@ -27,7 +28,7 @@ GOLD = (255, 210, 60)
 
 
 def outlined_text(surf, text, size, center, color=GOLD, outline=(60, 20, 70)):
-    font = pygame.font.Font(None, size)
+    font = load_font(size)
     w = max(3, size // 22)
     base = font.render(text, True, outline)
     for dx in range(-w, w + 1, max(1, w // 2)):

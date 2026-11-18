@@ -39,6 +39,7 @@ command -v "$PYTHON" >/dev/null || { echo "Python 3 was not found." >&2; exit 1;
 say "Copying the game to $DEST"
 mkdir -p "$DEST/game"
 cp "$SRC"/*.py "$DEST/game/"
+cp -r "$SRC/assets" "$DEST/game/"
 
 say "Setting up Python and pygame-ce (first run downloads about 15 MB)"
 if [ ! -x "$DEST/venv/bin/python" ]; then
