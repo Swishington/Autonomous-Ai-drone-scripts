@@ -64,44 +64,98 @@ def avatars(surf, roster, picks, row_center, size):
         surf.blit(img, img.get_rect(center=(left + i * gap, row_center[1] + bob)))
 
 
-def main(out_dir):
+def render_3d_shots(sizes):
+    """Real chase-camera frames from Kart Rush 3D, one per requested size; None if 3D isn't available."""
+    try:
+        import kart_racer as kr
+        from input_manager import InputFrame
+        g = kr.Game(headless=True, mode3d=True, title="Kart Rush 3D")
+        if g.r3d is None:
+            return None
+        g.players = [kr.Player(0, "kb_arrows", 0), kr.Player(1, "kb_wasd", 1)]
+        g.ai_count, g.laps = 4, 3
+        g.new_race()
+        g.state = "race"
+        blank = pygame.Surface((kr.SCREEN_W, kr.SCREEN_H), pygame.SRCALPHA)
+        full = (0, 0, kr.SCREEN_W, kr.SCREEN_H)
+        for step in range(int(60 * 5.5)):  # countdown, then a couple of seconds of racing
+            frames = {}
+            for k in g.humans:
+                st, th, br = g.ai_drive(k)
+                frames[k.player.device] = InputFrame(st, th, br, abs(st) > 0.5, {"boost"} if step % 80 == 0 else set())
+            g.update_race(1 / 60, frames)
+            g.time += 1 / 60
+            if step % 6 == 0:
+                g.r3d.render(g, blank, [(full, g.humans[step // 6 % 2])])  # keep both chase cameras moving
+        shots = []
+        for i, size in enumerate(sizes):
+            g.r3d.fbo = g.r3d.ctx.simple_framebuffer(size, components=4)
+            g.r3d.size = size
+            g.r3d.render(g, blank, [(full, g.humans[i % 2])])
+            shots.append(g.r3d.snapshot())
+        return shots
+    except Exception as e:  # noqa: BLE001 - fall back to the flat artwork
+        print(f"(3D artwork unavailable: {e}; using flat artwork)")
+        return None
+
+
+def main(out_dir, three_d=False):
     pygame.init()
     pygame.display.set_mode((1, 1))
     os.makedirs(out_dir, exist_ok=True)
     track = Track()
     roster = load_roster()
+    title = "KART RUSH 3D" if three_d else TITLE
+    shots = render_3d_shots([(600, 900), (920, 430), (1920, 620)]) if three_d else None
 
-    cap = background(track, (600, 900))
-    tint(cap, 90)
-    outlined_text(cap, "KART", 200, (300, 150))
-    outlined_text(cap, "RUSH", 200, (300, 300))
-    avatars(cap, roster, [0, 1], (300, 520), 230)
-    avatars(cap, roster, [2, 9, 11], (300, 760), 150)
+    if shots:
+        cap = shots[0]
+        tint(cap, 30)
+        outlined_text(cap, "KART", 190, (300, 120))
+        outlined_text(cap, "RUSH 3D", 150, (300, 255))
+    else:
+        cap = background(track, (600, 900))
+        tint(cap, 90)
+        outlined_text(cap, "KART", 200, (300, 150))
+        outlined_text(cap, "RUSH 3D" if three_d else "RUSH", 150 if three_d else 200, (300, 300))
+        avatars(cap, roster, [0, 1], (300, 520), 230)
+        avatars(cap, roster, [2, 9, 11], (300, 760), 150)
     pygame.image.save(cap, os.path.join(out_dir, "capsule.png"))
 
-    wide = background(track, (920, 430))
-    tint(wide, 80)
-    outlined_text(wide, TITLE, 150, (460, 100))
-    avatars(wide, roster, [2, 0, 1, 9, 11], (460, 290), 170)
+    if shots:
+        wide = shots[1]
+        tint(wide, 20)
+        outlined_text(wide, title, 120, (460, 80))
+    else:
+        wide = background(track, (920, 430))
+        tint(wide, 80)
+        outlined_text(wide, title, 120 if three_d else 150, (460, 100))
+        avatars(wide, roster, [2, 0, 1, 9, 11], (460, 290), 170)
     pygame.image.save(wide, os.path.join(out_dir, "wide.png"))
 
-    hero = background(track, (1920, 620), focus=(1600, 1200))
-    tint(hero, 40)
-    avatars(hero, roster, [3, 4, 7, 10], (1450, 330), 220)
+    if shots:
+        hero = shots[2]
+    else:
+        hero = background(track, (1920, 620), focus=(1600, 1200))
+        tint(hero, 40)
+        avatars(hero, roster, [3, 4, 7, 10], (1450, 330), 220)
     pygame.image.save(hero, os.path.join(out_dir, "hero.png"))
 
     logo = pygame.Surface((1280, 400), pygame.SRCALPHA)
-    outlined_text(logo, TITLE, 260, (640, 200))
+    outlined_text(logo, title, 230 if three_d else 260, (640, 200))
     pygame.image.save(logo, os.path.join(out_dir, "logo.png"))
 
     icon = pygame.Surface((256, 256), pygame.SRCALPHA)
-    pygame.draw.rect(icon, (255, 150, 200), icon.get_rect(), border_radius=48)
+    pygame.draw.rect(icon, (110, 180, 255) if three_d else (255, 150, 200), icon.get_rect(), border_radius=48)
     pygame.draw.rect(icon, (120, 40, 110), icon.get_rect(), 8, border_radius=48)
     icon.blit(pygame.transform.smoothscale(roster[0].kart, (190, 129)), (33, 110))
     icon.blit(pygame.transform.smoothscale(roster[0].avatar_full, (150, 150)), (53, 6))
+    if three_d:
+        outlined_text(icon, "3D", 110, (196, 200), color=(255, 255, 255))
     pygame.image.save(icon, os.path.join(out_dir, "icon.png"))
     print(f"Artwork written to {out_dir}")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "steam_art")
+    args = [a for a in sys.argv[1:] if a != "--3d"]
+    main(args[0] if args else "steam_art", three_d="--3d" in sys.argv[1:])

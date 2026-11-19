@@ -29,7 +29,7 @@ PLAYER_COLORS = [(255, 80, 80), (70, 150, 255), (80, 210, 90), (255, 200, 40)]
 TRACK_WIDTH = 180
 CURB_WIDTH = 12
 WORLD_W, WORLD_H = 3200, 2300
-SAVE_FILE = os.path.join(os.path.expanduser("~"), ".kart_rush_best.json")
+SAVE_DIR = os.path.expanduser("~")
 
 # Hand-placed control points of the circuit (smoothed with a Catmull-Rom spline).
 TRACK_POINTS = [
@@ -565,10 +565,12 @@ def view_rects(n):
 
 
 class Game:
-    def __init__(self, headless=False, fullscreen=False, mode3d=None):
+    def __init__(self, headless=False, fullscreen=False, mode3d=False, title="Kart Rush"):
+        """`mode3d=True` is Kart Rush 3D (chase cameras); otherwise the classic top-down Kart Rush."""
         pygame.init()
-        if mode3d is None:
-            mode3d = not headless
+        self.title = title
+        # Each game keeps its own best lap (".kart_rush_best.json", ".kart_rush_3d_best.json").
+        self.save_file = os.path.join(SAVE_DIR, "." + title.lower().replace(" ", "_") + "_best.json")
         self.r3d = None
         if mode3d:
             self.r3d = self._start_3d(headless, fullscreen)
@@ -578,7 +580,7 @@ class Game:
         else:  # 2D HUD and menus are drawn on this see-through layer over the 3D scene
             self.screen = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
         pygame.mouse.set_visible(headless or not fullscreen)
-        pygame.display.set_caption("Kart Rush")
+        pygame.display.set_caption(title)
         self.clock = pygame.time.Clock()
         self.font_huge = load_font(130)
         self.font_big = load_font(100)
@@ -649,14 +651,14 @@ class Game:
 
     def _load_best(self):
         try:
-            with open(SAVE_FILE) as f:
+            with open(self.save_file) as f:
                 return json.load(f).get("best_lap")
         except (OSError, ValueError):
             return None
 
     def _save_best(self):
         try:
-            with open(SAVE_FILE, "w") as f:
+            with open(self.save_file, "w") as f:
                 json.dump({"best_lap": self.best_lap}, f)
         except OSError:
             pass
@@ -1117,7 +1119,7 @@ class Game:
         self.overlay(self.screen, 170)
         S = self.screen
         cx = SCREEN_W / 2
-        self.text(S, self.font_big, "KART RUSH", (cx, 52), (255, 210, 60), anchor="center")
+        self.text(S, self.font_big, self.title.upper(), (cx, 52), (255, 210, 60), anchor="center")
         self.text(S, self.font, "Up to 4 players: press A on your controller (or Enter / Space on the keyboard) to join!",
                   (cx, 110), anchor="center")
         pw, ph, gap = 290, 500, 20
@@ -1385,9 +1387,16 @@ class Game:
         pygame.quit()
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Kart Rush")
+def main(three_d=False):
+    """Kart Rush (top-down) by default; kart_rush_3d.py starts Kart Rush 3D."""
+    title = "Kart Rush 3D" if three_d else "Kart Rush"
+    parser = argparse.ArgumentParser(description=title)
     parser.add_argument("--fullscreen", action="store_true", help="start in fullscreen (used by the Steam launcher)")
-    parser.add_argument("--2d", dest="flat", action="store_true", help="use the top-down 2D view instead of 3D")
+    if three_d:
+        parser.add_argument("--2d", dest="flat", action="store_true", help="use the top-down view (if 3D misbehaves)")
     args = parser.parse_args()
-    Game(fullscreen=args.fullscreen, mode3d=not args.flat).run()
+    Game(fullscreen=args.fullscreen, mode3d=three_d and not args.flat, title=title).run()
+
+
+if __name__ == "__main__":
+    main(three_d=False)

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Install Kart Rush on Bazzite (or SteamOS / any Linux with Steam) and add it to Steam.
+# Install Kart Rush and Kart Rush 3D on Bazzite (or SteamOS / any Linux with Steam)
+# and add them to Steam. Both games share this install; each gets its own launcher,
+# app-menu entry and Steam artwork.
 #
 #   ./install.sh                         install (or update) the game
 #   ./install.sh --names Sister Brother ...and set the names of the two family racers
 #
 # Everything goes into your home folder, so it works on Bazzite's read-only system:
 #   ~/.local/share/kart-rush/            game files, Python environment, Steam artwork
-#   ~/.local/share/applications/         a "Kart Rush" app entry (so Steam can find it)
+#   ~/.local/share/applications/         "Kart Rush" and "Kart Rush 3D" app entries (so Steam finds them)
 #   ~/.config/kart-rush/family.json      the family racers' names (only if --names given)
 # Run it again any time to update after downloading a newer version.
 set -euo pipefail
@@ -58,52 +60,65 @@ with open(sys.argv[1], "w") as f:
 PY
 fi
 
-say "Making the launcher"
-cat > "$DEST/kart-rush.sh" <<EOF
+say "Making the launchers"
+make_launcher() {  # name, script
+    cat > "$DEST/$1.sh" <<EOF
 #!/usr/bin/env bash
-# Starts Kart Rush fullscreen. Add this file to Steam as a Non-Steam Game.
+# Starts $1 fullscreen. Add this to Steam as a Non-Steam Game.
 cd "$DEST/game"
-exec "$DEST/venv/bin/python" kart_racer.py --fullscreen "\$@"
+exec "$DEST/venv/bin/python" $2 --fullscreen "\$@"
 EOF
-chmod +x "$DEST/kart-rush.sh"
+    chmod +x "$DEST/$1.sh"
+}
+make_launcher kart-rush kart_racer.py
+make_launcher kart-rush-3d kart_rush_3d.py
 
 say "Drawing Steam artwork"
 "$DEST/venv/bin/python" "$DEST/game/make_art.py" "$DEST/steam-art" >/dev/null
+"$DEST/venv/bin/python" "$DEST/game/make_art.py" "$DEST/steam-art-3d" --3d >/dev/null
 mkdir -p "$DATA/icons/hicolor/256x256/apps"
 cp "$DEST/steam-art/icon.png" "$DATA/icons/hicolor/256x256/apps/kart-rush.png"
+cp "$DEST/steam-art-3d/icon.png" "$DATA/icons/hicolor/256x256/apps/kart-rush-3d.png"
 
-say "Adding Kart Rush to the app menu"
+say "Adding the games to the app menu"
 mkdir -p "$DATA/applications"
-DESKTOP="$DATA/applications/kart-rush.desktop"
-cat > "$DESKTOP" <<EOF
+make_desktop() {  # id, name, comment
+    cat > "$DATA/applications/$1.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Kart Rush
-Comment=Kart racing for up to 4 players with controllers
-Exec="$DEST/kart-rush.sh"
-Icon=kart-rush
+Name=$2
+Comment=$3
+Exec="$DEST/$1.sh"
+Icon=$1
 Terminal=false
 Categories=Game;
 EOF
+}
+make_desktop kart-rush "Kart Rush" "Top-down kart racing for up to 4 players with controllers"
+make_desktop kart-rush-3d "Kart Rush 3D" "3D chase-camera kart racing for up to 4 players with controllers"
 command -v update-desktop-database >/dev/null && update-desktop-database "$DATA/applications" >/dev/null 2>&1 || true
 
 say "Adding to Steam"
 if command -v steamos-add-to-steam >/dev/null; then
-    steamos-add-to-steam "$DESKTOP" && echo "Sent to Steam - look for Kart Rush in your library." \
-        || echo "That didn't work - use the manual steps below."
+    for g in kart-rush kart-rush-3d; do
+        steamos-add-to-steam "$DATA/applications/$g.desktop" || true
+    done
+    echo "Sent both games to Steam - if they're not in your library, use the steps below."
 else
     echo "Do this once in Desktop Mode:"
 fi
 cat <<EOF
 
   1. Open Steam, then Games > Add a Non-Steam Game to My Library...
-  2. Tick "Kart Rush" in the list and click "Add Selected Programs".
-     (Not listed? Click Browse... and pick $DEST/kart-rush.sh)
-  3. Optional cover art: in your Library, right-click Kart Rush > Manage >
+  2. Tick "Kart Rush" and "Kart Rush 3D" and click "Add Selected Programs".
+     (Not listed? Click Browse... and pick $DEST/kart-rush.sh
+      or $DEST/kart-rush-3d.sh)
+  3. Optional cover art: in your Library, right-click a game > Manage >
      Set custom artwork, and pick the pictures in:
-        $DEST/steam-art
+        Kart Rush:     $DEST/steam-art
+        Kart Rush 3D:  $DEST/steam-art-3d
      (capsule.png = cover, hero.png = banner, logo.png = logo)
 
-Kart Rush then shows up in Game Mode with your other games. Every controller
-plugged in can join, and the Steam button > Exit Game quits it.
+Both games then show up in Game Mode with your other games. Every controller
+plugged in can join, and the Steam button > Exit Game quits.
 EOF

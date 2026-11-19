@@ -1,7 +1,15 @@
-# Kart Rush
+# Kart Rush and Kart Rush 3D
 
-A 3D arcade kart racer for PC, made to be played with console-style
-controllers. Each player gets a chase camera behind their kart. **Up to 4 people play split-screen**, and computer racers fill
+Two arcade kart racers for PC, made to be played with console-style
+controllers:
+
+- **Kart Rush:** the original top-down racer (`kart_racer.py`).
+- **Kart Rush 3D:** the same racers and races, with a 3D chase camera
+  behind each kart (`kart_rush_3d.py`).
+
+They're separate games with their own titles, Steam entries, artwork and
+best-lap records. Underneath they share the same code, so the characters,
+controls, Little Racer mode and fixes are the same in both. **Up to 4 people play split-screen**, and computer racers fill
 the rest of the grid. Pick one of 10 racers and race through a candy
 countryside with lollipops, gumdrops and mushrooms.
 
@@ -12,14 +20,15 @@ Requires Python 3.8+.
 ```sh
 cd game/kart_racer
 pip install -r requirements.txt
-python kart_racer.py            # add --fullscreen for fullscreen, --2d for the top-down view
+python kart_racer.py            # Kart Rush (top-down)
+python kart_rush_3d.py          # Kart Rush 3D       (both take --fullscreen)
 ```
 
 Press **F11** for fullscreen.
 
-## 3D view
+## Kart Rush 3D
 
-The race is drawn in 3D with OpenGL (through [ModernGL](https://github.com/moderngl/moderngl)):
+Kart Rush 3D draws the race in 3D with OpenGL (through [ModernGL](https://github.com/moderngl/moderngl)):
 - **Chase cameras:** each player has a smooth camera behind their kart, with
   split-screen for 2–4 players.
 - **Scenery:** the track artwork is the ground, with toon-shaded, outlined 3D
@@ -28,9 +37,9 @@ The race is drawn in 3D with OpenGL (through [ModernGL](https://github.com/moder
   them as upright cut-outs.
 
 The menus and HUD are drawn on top. If a PC can't run OpenGL 3.3, or
-ModernGL isn't installed, the game automatically uses the original top-down
-view. `--2d` also forces the top-down view. The racing itself is the same in
-both views.
+ModernGL isn't installed, Kart Rush 3D falls back to the top-down view.
+`kart_rush_3d.py --2d` also forces it. The racing itself is identical in
+both games.
 
 ## Install on Bazzite and add to Steam
 
@@ -59,14 +68,17 @@ Bazzite's read-only system. It doesn't need `sudo`. It:
 - makes a fullscreen launcher and a "Kart Rush" app-menu entry;
 - draws Steam artwork into `~/.local/share/kart-rush/steam-art`.
 
-Then add it to Steam:
+It installs **both games**. Then add them to Steam:
 1. In Steam, go to **Games → Add a Non-Steam Game to My Library...**.
-2. Tick **Kart Rush** and click **Add Selected Programs**.
-3. Optional: right-click it, then **Manage → Set custom artwork**, and pick
-   `capsule.png` (cover), `hero.png` (banner) and `logo.png` from the
-   `steam-art` folder.
+2. Tick **Kart Rush** and **Kart Rush 3D**, then click **Add Selected
+   Programs**.
+3. Optional: right-click each game, then **Manage → Set custom artwork**,
+   and pick `capsule.png` (cover), `hero.png` (banner) and `logo.png`. The
+   pictures for Kart Rush are in `~/.local/share/kart-rush/steam-art`. The
+   pictures for Kart Rush 3D are in `~/.local/share/kart-rush/steam-art-3d`.
+   The 3D art is made from real 3D scenes.
 
-Kart Rush now appears in **Game Mode** alongside your other games. Every
+Both games now appear in **Game Mode** alongside your other games. Every
 controller that's connected can join. To quit, press the **Steam button →
 Exit Game**, or pause the game and press **Select/View**.
 
@@ -194,9 +206,10 @@ stick counts), `WRONG_WAY_SECONDS`, `WALL_BOUNCE` and `LITTLE_PLAYER_SKILL`
 
 - `kart_racer.py`: the game (track, physics, AI, lobby, settings, split-screen, HUD).
 - `characters.py`: the 10 racers, all drawn in code.
+- `kart_rush_3d.py`: starts Kart Rush 3D.
 - `render3d.py`: the 3D renderer: models, toon shading, chase cameras, split-screen.
 - `cartoon.py`: the cartoon look: supersampled shapes, sticker outlines, shading, soft shadows and outlined text.
 - `assets/fonts/`: the Lilita One font (SIL Open Font License, see `OFL-LilitaOne.txt`).
-- `make_art.py`: draws the Steam library artwork and icon.
+- `make_art.py`: draws the Steam artwork and icons (`--3d` for Kart Rush 3D).
 - `bazzite/install.sh`: the Bazzite / Linux installer.
 - `input_manager.py`: input from multiple controllers and a split keyboard, with hot-plug and rumble.
