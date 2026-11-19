@@ -122,6 +122,33 @@ If a controller gets unplugged mid-race, that player's kart keeps going (in
 Little Racer mode) or coasts. They're moved onto the next controller that's
 plugged in.
 
+## Music and sound
+
+All the music and sound effects are original and composed in code
+(`sound.py`), so there are no audio files to download:
+- **Music:** a gentle menu theme and a bouncy chiptune race theme. The music
+  quietens while the game is paused.
+- **Sound effects:**
+  - countdown beeps and "GO!";
+  - a boost whoosh, a sparkle chime and a "drift boost ready" ding;
+  - a cartoon *boing* off walls, a *bonk* into trees and kart bumps;
+  - the magic *poof*;
+  - lap dings, a final-lap jingle, a finish fanfare and menu blips.
+
+Kart sounds only play for the human players, so 8 karts don't make a din.
+Music and Sound can each be switched off on the race settings screen, and
+the choice is remembered. The installer pre-composes the music into
+`~/.cache/kart-rush/`. Without it, the first launch takes about 2 extra
+seconds.
+
+## Quitting
+
+- **Main menu:** press **Select / View** on any controller, or **Esc**, then
+  **A** to confirm or **B** to stay.
+- **During a race:** pause with **Start**, then press **Select / View** (or
+  **X** on the keyboard).
+- **Anywhere in Game Mode:** the **Steam button → Exit Game** also works.
+
 ## Modes (chosen per player)
 
 ### Little Racer (for about ages 3–5)
@@ -212,4 +239,5 @@ stick counts), `WRONG_WAY_SECONDS`, `WALL_BOUNCE` and `LITTLE_PLAYER_SKILL`
 - `assets/fonts/`: the Lilita One font (SIL Open Font License, see `OFL-LilitaOne.txt`).
 - `make_art.py`: draws the Steam artwork and icons (`--3d` for Kart Rush 3D).
 - `bazzite/install.sh`: the Bazzite / Linux installer.
+- `sound.py`: the synthesised music and sound effects.
 - `input_manager.py`: input from multiple controllers and a split keyboard, with hot-plug and rumble.

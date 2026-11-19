@@ -15,6 +15,7 @@ import pygame
 from cartoon import INK, Canvas, TextCache, blur, draw, finish, load_font, rounded_panel, soft_shadow
 from characters import load_roster
 from input_manager import EMPTY_FRAME, InputManager
+from sound import Audio
 
 SCREEN_W, SCREEN_H = 1280, 720
 FPS = 60
@@ -30,6 +31,7 @@ TRACK_WIDTH = 180
 CURB_WIDTH = 12
 WORLD_W, WORLD_H = 3200, 2300
 SAVE_DIR = os.path.expanduser("~")
+AUDIO_SETTINGS = os.path.join(os.path.expanduser("~"), ".config", "kart-rush", "audio.json")
 
 # Hand-placed control points of the circuit (smoothed with a Catmull-Rom spline).
 TRACK_POINTS = [
@@ -594,6 +596,8 @@ class Game:
             self.r3d.show_overlay(self.screen)
         pygame.display.flip()
         self.input = InputManager()
+        music_on, sfx_on = self._load_audio_settings()
+        self.audio = Audio(music_on, sfx_on)
         self.track = Track()
         self.roster = load_roster()
         if self.r3d:
@@ -644,10 +648,32 @@ class Game:
     def present(self):
         """Show the frame: 3D views + HUD layer, or the 2D screen."""
         if self.r3d:
-            racing = self.state not in ("lobby", "settings")
+            racing = self.state not in ("lobby", "settings", "quit_confirm")
             views = list(zip(view_rects(len(self.humans)), self.humans)) if racing else []
             self.r3d.render(self, self.screen, views)
         pygame.display.flip()
+
+    @staticmethod
+    def _load_audio_settings():
+        try:
+            with open(AUDIO_SETTINGS) as f:
+                data = json.load(f)
+            return bool(data.get("music", True)), bool(data.get("sfx", True))
+        except (OSError, ValueError, AttributeError):
+            return True, True
+
+    def _save_audio_settings(self):
+        try:
+            os.makedirs(os.path.dirname(AUDIO_SETTINGS), exist_ok=True)
+            with open(AUDIO_SETTINGS, "w") as f:
+                json.dump({"music": self.audio.music_on, "sfx": self.audio.sfx_on}, f)
+        except OSError:
+            pass
+
+    def sfx(self, name, kart=None):
+        """Play an effect (for karts, only the human players' ones, so 8 karts aren't a din)."""
+        if kart is None or kart.is_human:
+            self.audio.play(name)
 
     def _load_best(self):
         try:
@@ -757,6 +783,7 @@ class Game:
             kart.boost_timer = max(kart.boost_timer, 0.9)
             self.burst(kart.x, kart.y, kart.character.trail, 26, star=True)
             self.rumble(kart, 0.4, 0.8, 180)
+            self.sfx("sparkle", kart)
         # The kart always keeps moving; the gas just makes it a bit faster. No brakes.
         throttle = max(0.75, inp.throttle)
         return steer, throttle, 0.0, False
@@ -775,6 +802,7 @@ class Game:
         kart.vx, kart.vy = math.cos(kart.heading) * speed, math.sin(kart.heading) * speed
         kart.wrong_way_timer = 0.0
         kart.say("Poof! This way!", 1.6)
+        self.sfx("poof", kart)
         self.puff(kart.x, kart.y)
         self.burst(kart.x, kart.y, kart.character.trail + [(255, 255, 255)], 18, star=True, speed=260)
         self.rumble(kart, 0.4, 0.6, 250)
@@ -848,6 +876,8 @@ class Game:
                         b.vx -= ux * rel * 0.8; b.vy -= uy * rel * 0.8
                         self.rumble(a, 0.6, 0.3, 120)
                         self.rumble(b, 0.6, 0.3, 120)
+                        if (a.is_human or b.is_human) and rel < -60:
+                            self.sfx("bump")
 
     def collide_obstacles(self, kart):
         for tx, ty, r, _ in self.track.obstacles:
@@ -861,6 +891,7 @@ class Game:
                     kart.vx -= 1.5 * vn * ux; kart.vy -= 1.5 * vn * uy
                     kart.vx *= 0.5; kart.vy *= 0.5
                     self.rumble(kart, 1.0, 0.8, 250)
+                    self.sfx("bonk", kart)
 
     def update_race(self, dt, frames):
         self.emit_trails(dt)
@@ -868,13 +899,17 @@ class Game:
         if self.countdown > 0:
             prev = self.countdown
             self.countdown -= dt
+            tick = math.ceil(prev) != math.ceil(self.countdown) and 0 < self.countdown <= 3
             for h in self.humans:
-                if math.ceil(prev) != math.ceil(self.countdown) and self.countdown > 0:
+                if tick:
                     self.rumble(h, 0.2, 0.2, 80)
                 if self.countdown <= 0:
                     self.rumble(h, 0.5, 0.5, 200)
+            if tick:
+                self.sfx("beep")
             if self.countdown <= 0:
                 self.banner, self.banner_timer = "GO!", 1.0
+                self.sfx("go")
             return
         self.race_time += dt
         for kart in self.karts:
@@ -892,11 +927,16 @@ class Game:
                 steer, throttle, brake = self.ai_drive(kart)
                 drift = False
             boost_before = kart.boost_timer
+            charge_before = kart.drift_charge
             bounced = kart.update(dt, steer, throttle, brake, drift, self.track)
             if kart.is_human:
                 if kart.boost_timer > boost_before + 0.2:
                     self.rumble(kart, 0.3, 0.9, 200)
+                    self.sfx("boost")
+                if charge_before < 0.7 <= kart.drift_charge:
+                    self.sfx("ready")  # drift boost is charged: let go!
                 if bounced:
+                    self.sfx("boing")
                     self.rumble(kart, 0.5, 0.2, 120)
                     self.burst(kart.x, kart.y, [(255, 255, 255), (255, 230, 120)], 8, star=True, speed=120)
             self.collide_obstacles(kart)
@@ -920,15 +960,20 @@ class Game:
                 self.best_lap = lap
                 self._save_best()
                 kart.say(f"NEW BEST LAP  {fmt_time(lap)}", 2.0)
+                self.sfx("best")
             elif kart.laps < self.laps:
                 kart.say("Yay! Keep going!" if kart.little else f"Lap {kart.laps}  {fmt_time(lap)}", 1.8)
-            if not kart.little and kart.laps == self.laps - 1:
-                kart.say("FINAL LAP!", 1.8)
+                self.sfx("lap")
+            if kart.laps == self.laps - 1 and kart.laps > 0:
+                if not kart.little:
+                    kart.say("FINAL LAP!", 1.8)
+                self.sfx("final_lap")
         if kart.laps >= self.laps:
             kart.finished_time = self.race_time
             self.finish_order.append(kart)
             if kart.is_human:
                 self.rumble(kart, 0.7, 0.7, 500)
+                self.sfx("finish")
                 confetti = [(255, 110, 170), (255, 200, 80), (120, 210, 255), (180, 130, 255), (140, 230, 120)]
                 for _ in range(3):
                     self.burst(kart.x + random.uniform(-150, 150), kart.y + random.uniform(-100, 100),
@@ -1162,8 +1207,9 @@ class Game:
         if self.players and all(p.ready for p in self.players):
             self.text(S, self.font_med, "Everyone ready! Press A for race settings", (cx, SCREEN_H - 40), (120, 255, 120), anchor="center")
         else:
-            self.text(S, self.font_small, "Keyboard players: Arrows + Enter (Backspace = back) or WASD + Space (Q = back)  ·  Esc pause  ·  F11 fullscreen",
-                      (cx, SCREEN_H - 36), (210, 210, 210), anchor="center")
+            self.text(S, self.font_small, "Keyboard players: Arrows + Enter (Backspace = back) or WASD + Space (Q = back)  ·  F11 fullscreen",
+                      (cx, SCREEN_H - 46), (210, 210, 210), anchor="center")
+            self.text(S, self.font_small, "Quit game: Select / View button  or  Esc", (cx, SCREEN_H - 20), (255, 190, 190), anchor="center")
 
     def settings_rows(self):
         max_ai = MAX_RACERS - len(self.players)
@@ -1171,6 +1217,8 @@ class Game:
             ("Computer racers", f"{self.ai_count}", f"0 - {max_ai}"),
             ("Computer difficulty", DIFFICULTIES[self.ai_difficulty], "Easy / Medium / Hard"),
             ("Laps", f"{self.laps}", "1 - 5"),
+            ("Music", "On" if self.audio.music_on else "Off", "On / Off"),
+            ("Sound effects", "On" if self.audio.sfx_on else "Off", "On / Off"),
         ]
 
     def draw_settings(self):
@@ -1180,8 +1228,8 @@ class Game:
         cx = SCREEN_W / 2
         self.text(S, self.font_big, "Race settings", (cx, 80), (255, 210, 60), anchor="center")
         for i, (label, value, hint) in enumerate(self.settings_rows()):
-            rect = pygame.Rect(0, 0, 760, 90)
-            rect.center = (cx, 210 + i * 110)
+            rect = pygame.Rect(0, 0, 760, 74)
+            rect.center = (cx, 180 + i * 84)
             selected = i == self.settings_row
             rounded_panel(S, rect, (110, 180, 255, 225) if selected else (255, 255, 255, 45),
                           (255, 255, 255) if selected else INK, 5 if selected else 3, 20)
@@ -1190,7 +1238,7 @@ class Game:
             if selected:
                 self.text(S, self.font_small, hint, (rect.right - 130, rect.bottom - 12), (230, 230, 230), anchor="center")
         total = len(self.players) + self.ai_count
-        y = 560
+        y = 595
         self.text(S, self.font, f"{total} racers:", (cx - 300, y), anchor="midright")
         x = cx - 280
         for p in self.players:
@@ -1203,6 +1251,14 @@ class Game:
             self.text(S, self.font_small, "CPU", (x + 28, y + 36), (200, 200, 200), anchor="center")
             x += 66
         self.text(S, self.font_med, "Up/Down: choose   Left/Right: change   A: GO!   B: back", (cx, SCREEN_H - 40), anchor="center")
+
+    def draw_quit_confirm(self):
+        self.overlay(self.screen, 200)
+        cx, cy = SCREEN_W / 2, SCREEN_H / 2
+        rounded_panel(self.screen, (cx - 330, cy - 150, 660, 300), (60, 30, 90, 240), INK, 5, 26)
+        self.text(self.screen, self.font_big, f"Quit {self.title}?", (cx, cy - 70), (255, 210, 60), anchor="center")
+        self.text(self.screen, self.font_med, "A / Enter  -  yes, quit", (cx, cy + 20), (255, 180, 180), anchor="center")
+        self.text(self.screen, self.font_med, "B / Esc  -  keep playing", (cx, cy + 80), (180, 255, 180), anchor="center")
 
     def draw_pause(self):
         self.overlay(self.screen)
@@ -1252,27 +1308,34 @@ class Game:
                     self.players.append(new_player)
                     self.players.sort(key=lambda p: p.slot)
                     self.input.rumble(device, 0.4, 0.4, 150)
+                    self.sfx("join")
                 continue
             if player.ready:
                 if "back" in f.pressed:
                     player.ready = False
+                    self.sfx("back")
                 elif "confirm" in f.pressed and all(p.ready for p in self.players):
+                    self.sfx("select")
                     self.enter_settings()
                     return
                 continue
             n = len(self.roster)
             if "left" in f.pressed or "right" in f.pressed:
                 player.char_index = (player.char_index + (1 if "right" in f.pressed else -1)) % n
+                self.sfx("move")
                 if player.char_index == LITTLE_DEFAULT_CHARACTER:
                     player.little = True  # the little sister's racer starts in Little Racer
             elif "mode" in f.pressed:
                 player.little = not player.little
                 self.input.rumble(device, 0.2, 0.2, 80)
+                self.sfx("tick")
             elif "confirm" in f.pressed:
                 player.ready = True
                 self.input.rumble(device, 0.3, 0.6, 120)
+                self.sfx("select")
             elif "back" in f.pressed:
                 self.players.remove(player)
+                self.sfx("back")
 
     def enter_settings(self):
         self.state = "settings"
@@ -1285,23 +1348,37 @@ class Game:
         self.ai_count = min(self.ai_count, max_ai)
 
     def update_settings(self, pressed):
+        rows = len(self.settings_rows())
         if "up" in pressed:
-            self.settings_row = (self.settings_row - 1) % 3
+            self.settings_row = (self.settings_row - 1) % rows
+            self.sfx("move")
         elif "down" in pressed:
-            self.settings_row = (self.settings_row + 1) % 3
+            self.settings_row = (self.settings_row + 1) % rows
+            self.sfx("move")
         elif "left" in pressed or "right" in pressed:
             d = 1 if "right" in pressed else -1
-            self.settings_touched = True
             if self.settings_row == 0:
+                self.settings_touched = True
                 self.ai_count = max(0, min(MAX_RACERS - len(self.players), self.ai_count + d))
             elif self.settings_row == 1:
+                self.settings_touched = True
                 self.ai_difficulty = max(0, min(2, self.ai_difficulty + d))
-            else:
+            elif self.settings_row == 2:
+                self.settings_touched = True
                 self.laps = max(1, min(5, self.laps + d))
+            elif self.settings_row == 3:
+                self.audio.set_music(not self.audio.music_on)
+                self._save_audio_settings()
+            else:
+                self.audio.set_sfx(not self.audio.sfx_on)
+                self._save_audio_settings()
+            self.sfx("tick")
         elif "confirm" in pressed:
+            self.sfx("go")
             self.new_race()
             self.state = "race"
         elif "back" in pressed:
+            self.sfx("back")
             self.back_to_lobby()
 
     def back_to_lobby(self):
@@ -1340,17 +1417,32 @@ class Game:
         pressed = set().union(*(f.pressed for d, f in frames.items() if d in menu_devices))
 
         if self.state == "lobby":
-            self.update_lobby(frames)
+            anyone = set().union(*(f.pressed for f in frames.values()))  # any controller, joined or not
+            keyboard_esc = "pause" in frames["kb_arrows"].pressed
+            if "quit" in anyone or keyboard_esc:
+                self.state = "quit_confirm"  # Select / View button, or Esc / X on the keyboard
+                self.sfx("pause")
+            else:
+                self.update_lobby(frames)
+        elif self.state == "quit_confirm":
+            anyone = set().union(*(f.pressed for f in frames.values()))
+            if "confirm" in anyone:
+                self.running = False
+            elif anyone & {"back", "pause", "quit"}:
+                self.state = "lobby"
+                self.sfx("back")
         elif self.state == "settings":
             self.update_settings(pressed)
         elif self.state == "race":
             if "pause" in pressed:
                 self.state = "paused"
+                self.sfx("pause")
             else:
                 self.update_race(dt, frames)
         elif self.state == "paused":
             if "confirm" in pressed or "pause" in pressed:
                 self.state = "race"
+                self.sfx("select")
             elif "restart" in pressed:
                 self.new_race()
                 self.state = "race"
@@ -1368,8 +1460,13 @@ class Game:
             elif "back" in pressed:
                 self.back_to_lobby()
 
-        if self.state == "lobby":
+        menu = self.state in ("lobby", "settings", "quit_confirm")
+        self.audio.music("menu" if menu else "race",
+                         0.15 if self.state == "paused" else (0.3 if self.state == "results" else 0.45))
+        if self.state in ("lobby", "quit_confirm"):
             self.draw_lobby()
+            if self.state == "quit_confirm":
+                self.draw_quit_confirm()
         elif self.state == "settings":
             self.draw_settings()
         else:

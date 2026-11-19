@@ -73,6 +73,9 @@ EOF
 make_launcher kart-rush kart_racer.py
 make_launcher kart-rush-3d kart_rush_3d.py
 
+say "Composing the music"
+"$DEST/venv/bin/python" "$DEST/game/sound.py" >/dev/null 2>&1 || echo "(music will be composed on first launch instead)"
+
 say "Drawing Steam artwork"
 "$DEST/venv/bin/python" "$DEST/game/make_art.py" "$DEST/steam-art" >/dev/null
 "$DEST/venv/bin/python" "$DEST/game/make_art.py" "$DEST/steam-art-3d" --3d >/dev/null

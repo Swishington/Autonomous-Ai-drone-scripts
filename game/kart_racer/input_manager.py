@@ -288,7 +288,7 @@ class InputManager:
             actions.add("restart")
         if held & {"a", "b", "x", "y", "lb", "rb"}:
             actions.add("boost")  # any face/shoulder button: Little Racer's sparkle boost
-        if held & {"a", "b", "x", "y", "start"}:
+        if held & {"a", "b", "x", "y"}:
             actions.add("join")   # any face button joins, whatever the pad's layout
         if held & {"y", "dpad_up", "dpad_down"}:
             actions.add("mode")   # switch Little / Big Racer (not the stick: too easy to wiggle)
