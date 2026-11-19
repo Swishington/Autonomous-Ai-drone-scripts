@@ -102,13 +102,16 @@ make_desktop kart-rush-3d "Kart Rush 3D" "3D chase-camera kart racing for up to 
 command -v update-desktop-database >/dev/null && update-desktop-database "$DATA/applications" >/dev/null 2>&1 || true
 
 say "Adding to Steam"
-if command -v steamos-add-to-steam >/dev/null; then
+# steamos-add-to-steam only works while Steam's launcher service is running, and it
+# reports failure later in the background, so try it quietly and never claim success.
+if command -v steamos-add-to-steam >/dev/null && pgrep -x steam >/dev/null; then
     for g in kart-rush kart-rush-3d; do
-        steamos-add-to-steam "$DATA/applications/$g.desktop" || true
+        steamos-add-to-steam "$DATA/applications/$g.desktop" >/dev/null 2>&1 || true
     done
-    echo "Sent both games to Steam - if they're not in your library, use the steps below."
+    echo "Asked Steam to add the games. If they aren't in your library in a minute,"
+    echo "add them yourself (only needed once):"
 else
-    echo "Do this once in Desktop Mode:"
+    echo "Add the games to Steam once, in Desktop Mode:"
 fi
 cat <<EOF
 
