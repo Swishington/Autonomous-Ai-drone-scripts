@@ -1,7 +1,7 @@
 # Kart Rush
 
-A top-down arcade kart racer for PC, made to be played with console-style
-controllers. **Up to 4 people play split-screen**, and computer racers fill
+A 3D arcade kart racer for PC, made to be played with console-style
+controllers. Each player gets a chase camera behind their kart. **Up to 4 people play split-screen**, and computer racers fill
 the rest of the grid. Pick one of 10 racers and race through a candy
 countryside with lollipops, gumdrops and mushrooms.
 
@@ -12,10 +12,25 @@ Requires Python 3.8+.
 ```sh
 cd game/kart_racer
 pip install -r requirements.txt
-python kart_racer.py            # add --fullscreen for fullscreen
+python kart_racer.py            # add --fullscreen for fullscreen, --2d for the top-down view
 ```
 
 Press **F11** for fullscreen.
+
+## 3D view
+
+The race is drawn in 3D with OpenGL (through [ModernGL](https://github.com/moderngl/moderngl)):
+- **Chase cameras:** each player has a smooth camera behind their kart, with
+  split-screen for 2–4 players.
+- **Scenery:** the track artwork is the ground, with toon-shaded, outlined 3D
+  trees, lollipops, gumdrops and mushrooms, rolling hills and clouds.
+- **Karts and racers:** the karts lean into turns, and the characters ride
+  them as upright cut-outs.
+
+The menus and HUD are drawn on top. If a PC can't run OpenGL 3.3, or
+ModernGL isn't installed, the game automatically uses the original top-down
+view. `--2d` also forces the top-down view. The racing itself is the same in
+both views.
 
 ## Install on Bazzite and add to Steam
 
@@ -179,6 +194,7 @@ stick counts), `WRONG_WAY_SECONDS`, `WALL_BOUNCE` and `LITTLE_PLAYER_SKILL`
 
 - `kart_racer.py`: the game (track, physics, AI, lobby, settings, split-screen, HUD).
 - `characters.py`: the 10 racers, all drawn in code.
+- `render3d.py`: the 3D renderer: models, toon shading, chase cameras, split-screen.
 - `cartoon.py`: the cartoon look: supersampled shapes, sticker outlines, shading, soft shadows and outlined text.
 - `assets/fonts/`: the Lilita One font (SIL Open Font License, see `OFL-LilitaOne.txt`).
 - `make_art.py`: draws the Steam library artwork and icon.

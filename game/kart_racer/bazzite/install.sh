@@ -41,12 +41,12 @@ mkdir -p "$DEST/game"
 cp "$SRC"/*.py "$DEST/game/"
 cp -r "$SRC/assets" "$DEST/game/"
 
-say "Setting up Python and pygame-ce (first run downloads about 15 MB)"
+say "Setting up Python, pygame-ce and ModernGL for 3D (first run downloads about 20 MB)"
 if [ ! -x "$DEST/venv/bin/python" ]; then
     "$PYTHON" -m venv "$DEST/venv"
 fi
 "$DEST/venv/bin/python" -m pip install --quiet --upgrade pip
-"$DEST/venv/bin/python" -m pip install --quiet --upgrade "pygame-ce>=2.5"
+"$DEST/venv/bin/python" -m pip install --quiet --upgrade "pygame-ce>=2.5" "moderngl>=5.8"
 
 if [ -n "$SISTER" ]; then
     say "Saving racer names: $SISTER and $BROTHER"

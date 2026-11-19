@@ -1,2 +1,4 @@
 # Either works: pygame-ce (recommended, supports newer Python) or pygame
 pygame-ce>=2.5
+# 3D view (the game falls back to the top-down view without it)
+moderngl>=5.8

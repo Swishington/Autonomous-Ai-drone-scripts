@@ -174,6 +174,7 @@ class Track:
         self._draw_grass(surf, rng)
         self._draw_road_shadow(surf)
         self._draw_road(surf)
+        self.ground_surface = surf.copy()  # 3D mode: ground without the flat prop stickers
         for ob in self.obstacles:
             self._draw_obstacle(surf, *ob)
         return surf
@@ -402,6 +403,7 @@ class Kart:
 
     def update(self, dt, steer, throttle, brake, drift, track):
         """Advance physics. Returns True if the kart bounced off a wall."""
+        self.steer_input = steer  # the 3D view leans the kart into turns
         walls = self.little
         fx, fy = math.cos(self.heading), math.sin(self.heading)
         rx, ry = -fy, fx
@@ -563,10 +565,18 @@ def view_rects(n):
 
 
 class Game:
-    def __init__(self, headless=False, fullscreen=False):
+    def __init__(self, headless=False, fullscreen=False, mode3d=None):
         pygame.init()
-        flags = 0 if headless else pygame.SCALED | (pygame.FULLSCREEN if fullscreen else pygame.RESIZABLE)
-        self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), flags)
+        if mode3d is None:
+            mode3d = not headless
+        self.r3d = None
+        if mode3d:
+            self.r3d = self._start_3d(headless, fullscreen)
+        if self.r3d is None:  # classic top-down view
+            flags = 0 if headless else pygame.SCALED | (pygame.FULLSCREEN if fullscreen else pygame.RESIZABLE)
+            self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H), flags)
+        else:  # 2D HUD and menus are drawn on this see-through layer over the 3D scene
+            self.screen = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
         pygame.mouse.set_visible(headless or not fullscreen)
         pygame.display.set_caption("Kart Rush")
         self.clock = pygame.time.Clock()
@@ -578,10 +588,14 @@ class Game:
         self.text_cache = TextCache()
         self.screen.fill((40, 20, 60))  # building the cartoon sprites takes a moment
         self.text(self.screen, self.font_big, "Loading...", (SCREEN_W / 2, SCREEN_H / 2), (255, 210, 60), anchor="center")
+        if self.r3d:
+            self.r3d.show_overlay(self.screen)
         pygame.display.flip()
         self.input = InputManager()
         self.track = Track()
         self.roster = load_roster()
+        if self.r3d:
+            self.r3d.load_world(self.track, self.roster)
         self.best_lap = self._load_best()
         self.players = []
         self.ai_count = 3
@@ -597,6 +611,41 @@ class Game:
         self.banner_timer = 0.0
         self.results_since = 0.0
         self.new_race(preview=True)
+
+    @staticmethod
+    def _start_3d(headless, fullscreen):
+        """Open an OpenGL window (or offscreen buffer) for the 3D view; None if this PC can't."""
+        try:
+            import render3d
+            if headless:
+                pygame.display.set_mode((1, 1))
+                return render3d.Renderer3D(headless_size=(SCREEN_W, SCREEN_H))
+            pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
+            pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
+            pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
+            pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
+            pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4)
+            flags = pygame.OPENGL | pygame.DOUBLEBUF | (pygame.FULLSCREEN if fullscreen else pygame.RESIZABLE)
+            try:
+                pygame.display.set_mode((0, 0) if fullscreen else (SCREEN_W, SCREEN_H), flags)
+            except pygame.error:  # no multisampling available
+                pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 0)
+                pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 0)
+                pygame.display.set_mode((0, 0) if fullscreen else (SCREEN_W, SCREEN_H), flags)
+            return render3d.Renderer3D()
+        except Exception as e:  # noqa: BLE001 - any GL/driver problem: fall back to 2D
+            print(f"3D view unavailable ({e}); using the top-down view.")
+            pygame.display.quit()
+            pygame.display.init()
+            return None
+
+    def present(self):
+        """Show the frame: 3D views + HUD layer, or the 2D screen."""
+        if self.r3d:
+            racing = self.state not in ("lobby", "settings")
+            views = list(zip(view_rects(len(self.humans)), self.humans)) if racing else []
+            self.r3d.render(self, self.screen, views)
+        pygame.display.flip()
 
     def _load_best(self):
         try:
@@ -909,6 +958,8 @@ class Game:
         return max(0, min(WORLD_W - w, cx)), max(0, min(WORLD_H - h, cy))
 
     def draw_world(self, surf, focus):
+        if self.r3d:
+            return 0, 0  # the 3D renderer draws the world
         w, h = surf.get_size()
         cam_x, cam_y = self.camera(focus, w, h)
         surf.blit(self.track.surface, (0, 0), pygame.Rect(cam_x, cam_y, w, h))
@@ -1031,9 +1082,10 @@ class Game:
 
     def draw_race(self):
         views = view_rects(len(self.humans))
-        self.screen.fill((10, 10, 20))
-        for k in self.karts:
-            k.prepare_sprite()
+        self.screen.fill((0, 0, 0, 0) if self.r3d else (10, 10, 20))
+        if not self.r3d:
+            for k in self.karts:
+                k.prepare_sprite()
         for rect, kart in zip(views, self.humans):
             self.draw_view(self.screen.subsurface(rect), kart, right_side=rect.left > 0)
         n = len(self.humans)
@@ -1054,6 +1106,9 @@ class Game:
 
     # --- menus ------------------------------------------------------------------
     def draw_menu_background(self):
+        if self.r3d:
+            self.screen.fill((0, 0, 0, 0))  # a 3D flyover of the track shows through
+            return
         k = self.karts[0]
         self.screen.blit(self.track.surface, (0, 0), pygame.Rect(*self.camera(k, SCREEN_W, SCREEN_H), SCREEN_W, SCREEN_H))
 
@@ -1267,7 +1322,14 @@ class Game:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
-                pygame.display.toggle_fullscreen()
+                try:
+                    pygame.display.toggle_fullscreen()
+                except pygame.error:
+                    pass
+                if self.r3d:
+                    self.r3d.resize(pygame.display.get_window_size())
+            elif event.type in (pygame.VIDEORESIZE, getattr(pygame, "WINDOWSIZECHANGED", -1)) and self.r3d:
+                self.r3d.resize(pygame.display.get_window_size())
             self.input.handle_event(event)
         self.rebind_unplugged()
         frames = self.input.poll()
@@ -1319,12 +1381,13 @@ class Game:
         while self.running:
             dt = min(self.clock.tick(FPS) / 1000.0, 1 / 30)
             self.step(dt)
-            pygame.display.flip()
+            self.present()
         pygame.quit()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Kart Rush")
     parser.add_argument("--fullscreen", action="store_true", help="start in fullscreen (used by the Steam launcher)")
+    parser.add_argument("--2d", dest="flat", action="store_true", help="use the top-down 2D view instead of 3D")
     args = parser.parse_args()
-    Game(fullscreen=args.fullscreen).run()
+    Game(fullscreen=args.fullscreen, mode3d=not args.flat).run()
